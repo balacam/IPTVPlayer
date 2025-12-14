@@ -1,0 +1,265 @@
+import { useState } from 'react';
+import { Upload, Loader, RefreshCw, Menu } from 'lucide-react';
+import Sidebar from './components/Sidebar';
+import ChannelList from './components/ChannelList';
+import Player from './components/Player';
+import { parseM3U } from './utils/m3uParser';
+
+function App() {
+    const [data, setData] = useState({ channels: [], groups: {} });
+    const [selectedGroup, setSelectedGroup] = useState('All');
+    const [selectedChannel, setSelectedChannel] = useState(null);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const openInVLC = async (url) => {
+        try {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('open-external-player', url, 'vlc');
+        } catch (error) {
+            console.error('Failed to open VLC:', error);
+        }
+    };
+
+    const handleChannelSelect = async (channel, openExternal = false) => {
+        // Check if the channel URL looks like a playlist (nested m3u)
+        // Common indicators: type=m3u, ends with .m3u or .m3u8 but not a stream, contains get.php
+        const isPlaylistUrl = channel.url.includes('type=m3u') ||
+            channel.url.includes('get.php') ||
+            channel.url.includes('playlist.php') ||
+            (channel.url.includes('.m3u') && !channel.url.includes('.m3u8'));
+
+        // If double-clicked and not a playlist, open in VLC
+        if (openExternal && !isPlaylistUrl) {
+            openInVLC(channel.url);
+            setSelectedChannel(channel);
+            return;
+        }
+
+        if (isPlaylistUrl) {
+            setIsLoading(true);
+            try {
+                console.log('Loading nested playlist from:', channel.url);
+
+                let text;
+
+                try {
+                    const { ipcRenderer } = window.require('electron');
+                    text = await ipcRenderer.invoke('fetch-content', channel.url);
+                } catch (fetchError) {
+                    console.error('Fetch error:', fetchError);
+                    throw new Error(`Network error: ${fetchError.message}`);
+                }
+
+                console.log('Received playlist content length:', text.length);
+
+                if (!text || text.length < 10) {
+                    throw new Error('Received empty or invalid playlist content');
+                }
+
+                // Check if content looks like M3U
+                if (!text.includes('#EXTM3U') && !text.includes('#EXTINF')) {
+                    console.warn('Content does not appear to be M3U format:', text.substring(0, 200));
+                    throw new Error('Invalid M3U format received');
+                }
+
+                // Parse it
+                const parsedData = parseM3U(text);
+
+                if (!parsedData.channels || parsedData.channels.length === 0) {
+                    throw new Error('No channels found in the playlist');
+                }
+
+                console.log('Successfully parsed', parsedData.channels.length, 'channels');
+
+                // Update specific metadata if needed, or just replace the view
+                setData(parsedData);
+
+                // Select first group or All
+                const groupNames = Object.keys(parsedData.groups);
+                if (groupNames.length > 0) {
+                    setSelectedGroup(groupNames[0]);
+                } else {
+                    setSelectedGroup('All');
+                }
+                setSelectedChannel(null); // Clear player
+
+            } catch (error) {
+                console.error("Failed to load nested playlist:", error);
+                
+                // Don't block UI with alert, show a toast or inline error instead
+                const errorMsg = error.message.includes('timeout') 
+                    ? 'Bağlantı zaman aşımına uğradı. Tekrar deneyin.'
+                    : error.message.includes('CORS')
+                    ? 'Sunucu erişim hatası. Bu playlist desteklenmiyor olabilir.'
+                    : `Playlist yüklenemedi: ${error.message}`;
+                
+                console.warn('User-friendly error:', errorMsg);
+                
+                // You could show this in a toast notification instead of alert
+                // For now, we'll use a less intrusive approach
+                setTimeout(() => {
+                    if (confirm(`${errorMsg}\n\nTekrar denemek ister misiniz?`)) {
+                        handleChannelSelect(channel);
+                    }
+                }, 100);
+                
+            } finally {
+                setIsLoading(false);
+            }
+        } else {
+            // Normal channel playback
+            setSelectedChannel(channel);
+        }
+    };
+
+    const handleFileUpload = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const content = e.target.result;
+            const parsedData = parseM3U(content);
+            setData(parsedData);
+
+            // Auto-select first group if available
+            const groupNames = Object.keys(parsedData.groups);
+            if (groupNames.length > 0) {
+                setSelectedGroup(groupNames[0]);
+            } else {
+                setSelectedGroup('All');
+            }
+        };
+        reader.readAsText(file);
+    };
+
+    const getDisplayedChannels = () => {
+        if (selectedGroup === 'All') {
+            return data.channels;
+        }
+        return data.groups[selectedGroup] || [];
+    };
+
+    return (
+        <div className="flex h-screen w-screen bg-white text-gray-900 overflow-hidden relative">
+            {/* Loading Overlay - Tam ekran modal */}
+            {isLoading && (
+                <div 
+                    style={{
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 99999
+                    }}
+                >
+                    <div 
+                        style={{
+                            backgroundColor: 'white',
+                            padding: '48px 64px',
+                            borderRadius: '16px',
+                            textAlign: 'center',
+                            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+                            border: '3px solid #f97316'
+                        }}
+                    >
+                        <Loader 
+                            className="animate-spin" 
+                            size={80} 
+                            style={{ color: '#f97316', marginBottom: '24px' }} 
+                        />
+                        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1f2937', marginBottom: '8px' }}>
+                            Playlist Yükleniyor...
+                        </div>
+                        <div style={{ fontSize: '14px', color: '#6b7280' }}>
+                            Lütfen bekleyin
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* File Upload Overlay if no data */}
+            {data.channels.length === 0 && (
+                <div className="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-6">
+                    <div className="bg-white p-8 rounded-lg shadow-lg border border-gray-200 max-w-md w-full text-center">
+                        <div className="w-16 h-16 bg-orange-500 rounded-lg flex items-center justify-center mx-auto mb-6">
+                            <Upload size={32} className="text-white" />
+                        </div>
+                        <h1 className="text-2xl font-bold text-gray-900 mb-2">IPTV Player'a Hoş Geldiniz</h1>
+                        <p className="text-gray-600 mb-6">iptv-playlist-parser & HLS.js tabanlı</p>
+
+                        <label className="block w-full">
+                            <span className="sr-only">M3U dosyası seçin</span>
+                            <input
+                                type="file"
+                                accept=".m3u,.m3u8"
+                                onChange={handleFileUpload}
+                                className="block w-full text-sm text-gray-600
+                  file:mr-4 file:py-2.5 file:px-4
+                  file:rounded-lg file:border-0
+                  file:text-sm file:font-semibold
+                  file:bg-orange-500 file:text-white
+                  hover:file:bg-orange-600
+                  cursor-pointer bg-gray-50 rounded-lg border border-gray-200"
+                            />
+                        </label>
+                        <p className="mt-4 text-xs text-gray-500">
+                            .m3u ve .m3u8 playlist dosyalarını destekler
+                        </p>
+                    </div>
+                </div>
+            )}
+
+            {/* Main Layout - Only show when data is loaded */}
+            {data.channels.length > 0 && (
+                <>
+                    {isSidebarOpen && (
+                        <Sidebar
+                            groups={data.groups}
+                            selectedGroup={selectedGroup}
+                            onSelectGroup={setSelectedGroup}
+                        />
+                    )}
+
+                    {/* Control Buttons */}
+                    <div className="absolute top-4 right-4 z-40 flex gap-2">
+                        <button
+                            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                            className="bg-white hover:bg-gray-50 text-gray-700 p-2 rounded-lg border border-gray-200 shadow-sm transition-colors"
+                            title="Kenar çubuğunu aç/kapat"
+                        >
+                            <Menu size={16} />
+                        </button>
+                        <button
+                            onClick={() => {
+                                setData({ channels: [], groups: {} });
+                                setSelectedChannel(null);
+                                setSelectedGroup('All');
+                            }}
+                            className="bg-white hover:bg-gray-50 text-gray-700 p-2 rounded-lg border border-gray-200 shadow-sm transition-colors"
+                            title="Yeni playlist yükle"
+                        >
+                            <RefreshCw size={16} />
+                        </button>
+                    </div>
+
+                    <ChannelList
+                        channels={getDisplayedChannels()}
+                        selectedChannel={selectedChannel}
+                        onSelectChannel={handleChannelSelect}
+                    />
+
+                    <Player channel={selectedChannel} />
+                </>
+            )}
+        </div>
+    );
+}
+
+export default App;
