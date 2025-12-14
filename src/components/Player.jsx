@@ -1,17 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Hls from 'hls.js';
+import mpegts from 'mpegts.js';
 import { ExternalLink, Copy, Info, Loader, AlertCircle, Volume2, VolumeX, RotateCcw } from 'lucide-react';
-
-// Get file extension from URL
-const getExtensionFromUrl = (url) => {
-    try {
-        const pathname = new URL(url).pathname;
-        const ext = pathname.split('.').pop()?.toLowerCase();
-        return ext || '';
-    } catch {
-        return '';
-    }
-};
 
 // Check if running in Electron
 const isElectron = () => {
@@ -33,9 +23,22 @@ const getProxyUrl = async (streamUrl) => {
     }
 };
 
+// Detect stream type from URL
+const detectStreamType = (url) => {
+    const lowerUrl = url.toLowerCase();
+    if (lowerUrl.includes('.m3u8')) return 'hls';
+    if (lowerUrl.includes('.ts')) return 'mpegts';
+    if (lowerUrl.includes('.mp4')) return 'mp4';
+    if (lowerUrl.includes('.flv')) return 'flv';
+    // IPTV URLs without extension are usually MPEG-TS
+    if (lowerUrl.match(/:\d+\/\w+\/\w+\/\d+$/)) return 'mpegts';
+    return 'unknown';
+};
+
 const Player = ({ channel }) => {
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
+    const mpegtsRef = useRef(null);
     const [showUrl, setShowUrl] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -44,90 +47,86 @@ const Player = ({ channel }) => {
         return saved ? parseFloat(saved) : 1;
     });
     const [isMuted, setIsMuted] = useState(false);
+    const [streamType, setStreamType] = useState('');
 
-    // Cleanup HLS instance
-    const destroyHls = useCallback(() => {
+    // Cleanup all player instances
+    const destroyPlayers = useCallback(() => {
         if (hlsRef.current) {
             hlsRef.current.destroy();
             hlsRef.current = null;
         }
+        if (mpegtsRef.current) {
+            mpegtsRef.current.destroy();
+            mpegtsRef.current = null;
+        }
     }, []);
 
-    // Play channel
-    const playChannel = useCallback(async (originalUrl, useProxy = true) => {
-        const video = videoRef.current;
-        if (!video || !originalUrl) return;
 
-        destroyHls();
-        video.pause();
+    // Play with MPEG-TS player
+    const playWithMpegts = useCallback((url, video) => {
+        console.log('Using mpegts.js for MPEG-TS stream');
         
-        // Clear existing sources
-        while (video.firstChild) {
-            video.removeChild(video.firstChild);
-        }
-        video.removeAttribute('src');
-        video.load();
+        if (mpegts.isSupported()) {
+            const player = mpegts.createPlayer({
+                type: 'mpegts',
+                url: url,
+                isLive: true,
+            }, {
+                enableWorker: true,
+                enableStashBuffer: false,
+                stashInitialSize: 128,
+                liveBufferLatencyChasing: true,
+                liveBufferLatencyMaxLatency: 1.5,
+                liveBufferLatencyMinRemain: 0.3,
+            });
 
-        setError(null);
-        setIsLoading(true);
-
-        // Get proxy URL if in Electron and proxy is enabled
-        let url = originalUrl;
-        if (useProxy && isElectron()) {
-            try {
-                url = await getProxyUrl(originalUrl);
-                console.log('Using proxy URL:', url);
-            } catch (e) {
-                console.warn('Failed to get proxy URL, using original:', e);
-            }
-        }
-
-        const extension = getExtensionFromUrl(originalUrl);
-        console.log('Playing URL:', url, 'Extension:', extension);
-
-        // For MP4/direct video files, use native player
-        if (extension === 'mp4' || extension === 'mpv' || extension === 'mkv' || extension === 'avi') {
-            console.log('Using native video player for:', extension);
-            const source = document.createElement('source');
-            source.src = url;
-            source.type = 'video/mp4';
-            video.appendChild(source);
+            mpegtsRef.current = player;
+            player.attachMediaElement(video);
+            player.load();
             
-            video.onloadeddata = () => {
+            player.on(mpegts.Events.LOADING_COMPLETE, () => {
+                console.log('MPEGTS: Loading complete');
+            });
+
+            player.on(mpegts.Events.METADATA_ARRIVED, () => {
+                console.log('MPEGTS: Metadata arrived');
                 setIsLoading(false);
                 video.play().catch(e => console.warn('Autoplay blocked:', e));
-            };
-            
-            video.onerror = () => {
-                setIsLoading(false);
-                setError('Video oynatılamadı');
-            };
-            
-            video.load();
-            return;
-        }
+            });
 
-        // For HLS/IPTV streams - try direct first, then proxy
+            player.on(mpegts.Events.ERROR, (type, detail) => {
+                console.error('MPEGTS Error:', type, detail);
+                setIsLoading(false);
+                setError('Stream oynatılamadı - VLC ile deneyin');
+            });
+
+            // Fallback play after short delay
+            setTimeout(() => {
+                if (video.readyState >= 2) {
+                    setIsLoading(false);
+                    video.play().catch(e => console.warn('Autoplay blocked:', e));
+                }
+            }, 2000);
+
+            return true;
+        }
+        return false;
+    }, []);
+
+    // Play with HLS.js
+    const playWithHls = useCallback((url, video) => {
+        console.log('Using HLS.js for HLS stream');
+        
         if (Hls.isSupported()) {
-            console.log('Using HLS.js for stream');
             const hls = new Hls({
                 enableWorker: true,
                 lowLatencyMode: false,
                 backBufferLength: 90,
                 maxBufferLength: 30,
-                maxMaxBufferLength: 600,
-                maxBufferSize: 60 * 1000 * 1000,
-                maxBufferHole: 0.5,
-                fragLoadingTimeOut: 30000,
-                manifestLoadingTimeOut: 30000,
-                levelLoadingTimeOut: 30000,
-                fragLoadingMaxRetry: 6,
-                manifestLoadingMaxRetry: 6,
-                levelLoadingMaxRetry: 6,
-                startFragPrefetch: true,
-                xhrSetup: (xhr) => {
-                    xhr.withCredentials = false;
-                }
+                fragLoadingTimeOut: 20000,
+                manifestLoadingTimeOut: 20000,
+                fragLoadingMaxRetry: 3,
+                manifestLoadingMaxRetry: 3,
             });
             
             hlsRef.current = hls;
@@ -135,84 +134,109 @@ const Player = ({ channel }) => {
             hls.loadSource(url);
 
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                console.log('HLS: Manifest parsed, starting playback');
+                console.log('HLS: Manifest parsed');
                 setIsLoading(false);
                 video.play().catch(e => console.warn('Autoplay blocked:', e));
             });
 
-            hls.on(Hls.Events.FRAG_LOADED, () => {
-                if (isLoading) setIsLoading(false);
-            });
-
             hls.on(Hls.Events.ERROR, (_, data) => {
-                console.error('HLS Error:', data.type, data.details, data.fatal);
-                
+                console.error('HLS Error:', data.type, data.details);
                 if (data.fatal) {
-                    switch (data.type) {
-                        case Hls.ErrorTypes.NETWORK_ERROR:
-                            console.log('HLS: Network error, trying to recover...');
-                            hls.startLoad();
-                            break;
-                        case Hls.ErrorTypes.MEDIA_ERROR:
-                            console.log('HLS: Media error, trying to recover...');
-                            hls.recoverMediaError();
-                            break;
-                        default:
-                            console.log('HLS: Fatal error, cannot recover');
+                    if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                        hls.recoverMediaError();
+                    } else {
+                        // HLS failed, might be MPEG-TS stream
+                        console.log('HLS failed, trying MPEG-TS...');
+                        hls.destroy();
+                        hlsRef.current = null;
+                        if (!playWithMpegts(url, video)) {
                             setIsLoading(false);
                             setError('Stream oynatılamadı - VLC ile deneyin');
-                            destroyHls();
-                            break;
+                        }
                     }
                 }
             });
 
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            // Safari native HLS
-            console.log('Using native HLS (Safari)');
-            video.src = url;
-            
-            video.onloadedmetadata = () => {
-                setIsLoading(false);
-                video.play().catch(e => console.warn('Autoplay blocked:', e));
-            };
-            
-            video.onerror = () => {
-                setIsLoading(false);
-                setError('Stream oynatılamadı');
-            };
-        } else {
-            // Fallback - try direct playback
-            console.log('Using direct playback fallback');
-            video.src = url;
-            
-            video.oncanplay = () => {
-                setIsLoading(false);
-                video.play().catch(e => console.warn('Autoplay blocked:', e));
-            };
-            
-            video.onerror = () => {
-                setIsLoading(false);
-                setError('Stream oynatılamadı - VLC ile deneyin');
-            };
-            
-            video.load();
+            return true;
+        }
+        return false;
+    }, [playWithMpegts]);
+
+
+    // Main play function
+    const playChannel = useCallback(async (originalUrl, useProxy = false) => {
+        const video = videoRef.current;
+        if (!video || !originalUrl) return;
+
+        destroyPlayers();
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+
+        setError(null);
+        setIsLoading(true);
+
+        // Get URL (with or without proxy)
+        let url = originalUrl;
+        if (useProxy && isElectron()) {
+            try {
+                url = await getProxyUrl(originalUrl);
+                console.log('Using proxy URL:', url);
+            } catch (e) {
+                console.warn('Failed to get proxy URL:', e);
+            }
         }
 
-        // Timeout for loading (10 seconds)
-        const loadTimeout = setTimeout(() => {
+        const type = detectStreamType(originalUrl);
+        setStreamType(type);
+        console.log('Playing URL:', url, 'Detected type:', type);
+
+        // Try based on detected type
+        if (type === 'mp4') {
+            video.src = url;
+            video.onloadeddata = () => {
+                setIsLoading(false);
+                video.play().catch(e => console.warn('Autoplay blocked:', e));
+            };
+            video.onerror = () => {
+                setIsLoading(false);
+                setError('Video oynatılamadı');
+            };
+            video.load();
+        } else if (type === 'hls' || type === 'unknown') {
+            // Try HLS first, it will fallback to MPEG-TS if needed
+            if (!playWithHls(url, video)) {
+                playWithMpegts(url, video);
+            }
+        } else if (type === 'mpegts' || type === 'flv') {
+            // Direct MPEG-TS stream
+            if (!playWithMpegts(url, video)) {
+                // Fallback to direct video src
+                video.src = url;
+                video.oncanplay = () => {
+                    setIsLoading(false);
+                    video.play().catch(e => console.warn('Autoplay blocked:', e));
+                };
+                video.onerror = () => {
+                    setIsLoading(false);
+                    setError('Stream oynatılamadı - VLC ile deneyin');
+                };
+                video.load();
+            }
+        }
+
+        // Timeout
+        setTimeout(() => {
             if (isLoading) {
                 setIsLoading(false);
                 if (!video.readyState) {
                     setError('Yükleme zaman aşımı - Proxy veya VLC ile deneyin');
                 }
             }
-        }, 10000);
+        }, 15000);
+    }, [destroyPlayers, playWithHls, playWithMpegts, isLoading]);
 
-        return () => clearTimeout(loadTimeout);
-    }, [destroyHls, isLoading]);
-
-    // Retry with proxy
+    // Retry functions
     const retryWithProxy = useCallback(() => {
         if (channel?.url) {
             console.log('Retrying with proxy...');
@@ -220,7 +244,6 @@ const Player = ({ channel }) => {
         }
     }, [channel, playChannel]);
 
-    // Retry without proxy (direct)
     const retryDirect = useCallback(() => {
         if (channel?.url) {
             console.log('Retrying direct...');
@@ -231,7 +254,7 @@ const Player = ({ channel }) => {
     // Effect to play channel when it changes
     useEffect(() => {
         if (!channel) {
-            destroyHls();
+            destroyPlayers();
             if (videoRef.current) {
                 videoRef.current.pause();
                 videoRef.current.removeAttribute('src');
@@ -247,10 +270,8 @@ const Player = ({ channel }) => {
             return;
         }
 
-        // Try direct first (faster if it works)
         playChannel(channel.url, false);
-
-        return () => destroyHls();
+        return () => destroyPlayers();
     }, [channel]);
 
     // Volume control
@@ -267,14 +288,10 @@ const Player = ({ channel }) => {
         localStorage.setItem('player-volume', newVolume.toString());
     };
 
-    const toggleMute = () => {
-        setIsMuted(!isMuted);
-    };
+    const toggleMute = () => setIsMuted(!isMuted);
 
     const copyUrl = () => {
-        if (channel?.url) {
-            navigator.clipboard.writeText(channel.url);
-        }
+        if (channel?.url) navigator.clipboard.writeText(channel.url);
     };
 
     const openInVLC = async () => {
@@ -345,7 +362,7 @@ const Player = ({ channel }) => {
                         <div className="text-center max-w-md p-6">
                             <AlertCircle className="text-red-500 mx-auto mb-3" size={48} />
                             <p className="text-white text-lg mb-2">{error}</p>
-                            <p className="text-gray-400 text-sm mb-4">Bu stream tarayıcıda desteklenmiyor olabilir</p>
+                            <p className="text-gray-400 text-sm mb-4">Stream türü: {streamType || 'bilinmiyor'}</p>
                             <div className="flex flex-col gap-2">
                                 <div className="flex gap-2 justify-center">
                                     <button
@@ -379,13 +396,11 @@ const Player = ({ channel }) => {
             {/* Info Bar */}
             <div className="p-3 bg-gray-800 border-t border-gray-700">
                 <div className="flex items-center justify-between gap-4">
-                    {/* Channel Info */}
                     <div className="flex-1 min-w-0">
                         <h2 className="text-sm font-semibold text-white truncate">{channel.name}</h2>
                         <p className="text-xs text-gray-400 truncate">{channel.group}</p>
                     </div>
 
-                    {/* Volume Control */}
                     <div className="flex items-center gap-2">
                         <button onClick={toggleMute} className="text-gray-400 hover:text-white transition-colors">
                             {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
@@ -401,7 +416,6 @@ const Player = ({ channel }) => {
                         />
                     </div>
 
-                    {/* Action Buttons */}
                     <div className="flex gap-2">
                         <button
                             onClick={() => setShowUrl(!showUrl)}
