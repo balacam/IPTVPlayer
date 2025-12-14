@@ -1,5 +1,23 @@
 @import "tailwindcss";
 
+/* Video.js custom styles */
+.video-js {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.video-js .vjs-tech {
+  object-fit: contain;
+}
+
+.video-js .vjs-big-play-button {
+  display: none;
+}
+
+.vjs-waiting .vjs-loading-spinner {
+  display: block;
+}
+
 :root {
   --bg-primary: #0f172a;
   --bg-secondary: #1e293b;
