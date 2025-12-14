@@ -1,16 +1,18 @@
+
 import { useState } from 'react';
-import { Upload, Loader, RefreshCw, Menu } from 'lucide-react';
-import Sidebar from './components/Sidebar';
+import { Upload, Loader, RefreshCw, Home, ChevronLeft } from 'lucide-react';
 import ChannelList from './components/ChannelList';
 import Player from './components/Player';
+import CategorySelection from './components/CategorySelection';
 import { parseM3U } from './utils/m3uParser';
 
 function App() {
-    const [data, setData] = useState({ channels: [], groups: {} });
+    const [data, setData] = useState({ channels: [], groups: {}, categories: { live: [], movie: [], series: [] } });
     const [selectedGroup, setSelectedGroup] = useState('All');
     const [selectedChannel, setSelectedChannel] = useState(null);
-    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [isLoading, setIsLoading] = useState(false);
+    const [selectedCategory, setSelectedCategory] = useState(null); // null = show category screen
+    const [isPlaylistView, setIsPlaylistView] = useState(false); // true if showing a list of playlists (flat view)
 
     const openInVLC = async (url) => {
         try {
@@ -21,22 +23,58 @@ function App() {
         }
     };
 
+    const isPlaylistUrl = (url) => {
+        const lowerUrl = url.toLowerCase();
+        return lowerUrl.includes('type=m3u') ||
+            lowerUrl.includes('get.php') ||
+            lowerUrl.includes('playlist.php') ||
+            (lowerUrl.includes('.m3u') && !lowerUrl.includes('.m3u8'));
+    };
+
+    const processPlaylistData = (parsedData) => {
+        // Check if we have detected playlists in the parser
+        // The parser now automatically categorizes nested lists as 'playlist'
+        const hasPlaylists = parsedData.categories &&
+            parsedData.categories.playlist &&
+            parsedData.categories.playlist.length > 0;
+
+        // Also fallback to group name check OR raw URL check just in case
+        const containsPlaylists = hasPlaylists || parsedData.channels.some(ch =>
+            isPlaylistUrl(ch.url) ||
+            (ch.group && ch.group.toLowerCase().includes('playlist'))
+        );
+
+        console.log('Processing playlist. hasPlaylists:', hasPlaylists, 'containsPlaylists:', containsPlaylists);
+
+        setData(parsedData);
+        setSelectedGroup('All');
+        setSelectedChannel(null); // Clear player
+
+        if (containsPlaylists) {
+            // Found nested playlists - show flat list, skip category screen
+            setSelectedCategory('all');
+            setIsPlaylistView(true);
+            console.log('Detected playlist directory - forcing flat view');
+        } else {
+            // Standard channels - show category selection
+            setSelectedCategory(null);
+            setIsPlaylistView(false);
+            console.log('Detected standard channels - showing category selection');
+        }
+    };
+
     const handleChannelSelect = async (channel, openExternal = false) => {
         // Check if the channel URL looks like a playlist (nested m3u)
-        // Common indicators: type=m3u, ends with .m3u or .m3u8 but not a stream, contains get.php
-        const isPlaylistUrl = channel.url.includes('type=m3u') ||
-            channel.url.includes('get.php') ||
-            channel.url.includes('playlist.php') ||
-            (channel.url.includes('.m3u') && !channel.url.includes('.m3u8'));
+        const isPlaylist = isPlaylistUrl(channel.url);
 
         // If double-clicked and not a playlist, open in VLC
-        if (openExternal && !isPlaylistUrl) {
+        if (openExternal && !isPlaylist) {
             openInVLC(channel.url);
             setSelectedChannel(channel);
             return;
         }
 
-        if (isPlaylistUrl) {
+        if (isPlaylist) {
             setIsLoading(true);
             try {
                 console.log('Loading nested playlist from:', channel.url);
@@ -72,38 +110,26 @@ function App() {
 
                 console.log('Successfully parsed', parsedData.channels.length, 'channels');
 
-                // Update specific metadata if needed, or just replace the view
-                setData(parsedData);
-
-                // Select first group or All
-                const groupNames = Object.keys(parsedData.groups);
-                if (groupNames.length > 0) {
-                    setSelectedGroup(groupNames[0]);
-                } else {
-                    setSelectedGroup('All');
-                }
-                setSelectedChannel(null); // Clear player
+                // Process the new data
+                processPlaylistData(parsedData);
 
             } catch (error) {
                 console.error("Failed to load nested playlist:", error);
-                
-                // Don't block UI with alert, show a toast or inline error instead
-                const errorMsg = error.message.includes('timeout') 
+
+                const errorMsg = error.message.includes('timeout')
                     ? 'Bağlantı zaman aşımına uğradı. Tekrar deneyin.'
                     : error.message.includes('CORS')
-                    ? 'Sunucu erişim hatası. Bu playlist desteklenmiyor olabilir.'
-                    : `Playlist yüklenemedi: ${error.message}`;
-                
+                        ? 'Sunucu erişim hatası. Bu playlist desteklenmiyor olabilir.'
+                        : `Playlist yüklenemedi: ${error.message}`;
+
                 console.warn('User-friendly error:', errorMsg);
-                
-                // You could show this in a toast notification instead of alert
-                // For now, we'll use a less intrusive approach
+
                 setTimeout(() => {
                     if (confirm(`${errorMsg}\n\nTekrar denemek ister misiniz?`)) {
                         handleChannelSelect(channel);
                     }
                 }, 100);
-                
+
             } finally {
                 setIsLoading(false);
             }
@@ -121,31 +147,49 @@ function App() {
         reader.onload = (e) => {
             const content = e.target.result;
             const parsedData = parseM3U(content);
-            setData(parsedData);
-
-            // Auto-select first group if available
-            const groupNames = Object.keys(parsedData.groups);
-            if (groupNames.length > 0) {
-                setSelectedGroup(groupNames[0]);
-            } else {
-                setSelectedGroup('All');
-            }
+            processPlaylistData(parsedData);
         };
         reader.readAsText(file);
     };
 
     const getDisplayedChannels = () => {
-        if (selectedGroup === 'All') {
-            return data.channels;
+        // Filter by category first, then by group
+        let channels = data.channels;
+
+        if (selectedCategory && selectedCategory !== 'all' && data.categories) {
+            channels = data.categories[selectedCategory] || [];
         }
-        return data.groups[selectedGroup] || [];
+
+        if (selectedGroup === 'All') {
+            return channels;
+        }
+
+        // Filter by group within category
+        return channels.filter(ch => ch.group === selectedGroup);
+    };
+
+    const getGroupsForCategory = () => {
+        if (!selectedCategory || !data.categories) {
+            return data.groups;
+        }
+
+        // Build groups from category channels
+        const categoryChannels = data.categories[selectedCategory] || [];
+        const groups = {};
+        categoryChannels.forEach(ch => {
+            if (!groups[ch.group]) {
+                groups[ch.group] = [];
+            }
+            groups[ch.group].push(ch);
+        });
+        return groups;
     };
 
     return (
         <div className="flex h-screen w-screen bg-white text-gray-900 overflow-hidden relative">
             {/* Loading Overlay - Tam ekran modal */}
             {isLoading && (
-                <div 
+                <div
                     style={{
                         position: 'fixed',
                         top: 0,
@@ -159,7 +203,7 @@ function App() {
                         zIndex: 99999
                     }}
                 >
-                    <div 
+                    <div
                         style={{
                             backgroundColor: 'white',
                             padding: '48px 64px',
@@ -169,10 +213,10 @@ function App() {
                             border: '3px solid #f97316'
                         }}
                     >
-                        <Loader 
-                            className="animate-spin" 
-                            size={80} 
-                            style={{ color: '#f97316', marginBottom: '24px' }} 
+                        <Loader
+                            className="animate-spin"
+                            size={80}
+                            style={{ color: '#f97316', marginBottom: '24px' }}
                         />
                         <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1f2937', marginBottom: '8px' }}>
                             Playlist Yükleniyor...
@@ -216,50 +260,55 @@ function App() {
                 </div>
             )}
 
-            {/* Main Layout - Only show when data is loaded */}
+            {/* Main Layout - Show when data is loaded */}
             {data.channels.length > 0 && (
-                <>
-                    {isSidebarOpen && (
-                        <Sidebar
-                            groups={data.groups}
-                            selectedGroup={selectedGroup}
-                            onSelectGroup={setSelectedGroup}
-                        />
-                    )}
-
-                    {/* Control Buttons */}
-                    <div className="absolute top-4 right-4 z-40 flex gap-2">
-                        <button
-                            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                            className="bg-white hover:bg-gray-50 text-gray-700 p-2 rounded-lg border border-gray-200 shadow-sm transition-colors"
-                            title="Kenar çubuğunu aç/kapat"
-                        >
-                            <Menu size={16} />
-                        </button>
-                        <button
-                            onClick={() => {
-                                setData({ channels: [], groups: {} });
-                                setSelectedChannel(null);
-                                setSelectedGroup('All');
-                            }}
-                            className="bg-white hover:bg-gray-50 text-gray-700 p-2 rounded-lg border border-gray-200 shadow-sm transition-colors"
-                            title="Yeni playlist yükle"
-                        >
-                            <RefreshCw size={16} />
-                        </button>
-                    </div>
-
-                    <ChannelList
-                        channels={getDisplayedChannels()}
-                        selectedChannel={selectedChannel}
-                        onSelectChannel={handleChannelSelect}
+                selectedCategory === null ? (
+                    <CategorySelection
+                        categories={data.categories}
+                        onSelectCategory={setSelectedCategory}
                     />
+                ) : (
 
-                    <Player channel={selectedChannel} />
-                </>
-            )}
-        </div>
+                    <>
+                        {/* Control Buttons */}
+                        <div className="absolute top-4 right-4 z-40 flex gap-2">
+                            <button
+                                onClick={() => setSelectedCategory(null)}
+                                className="bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2 rounded-lg border border-gray-700 shadow-sm transition-colors flex items-center gap-2"
+                                title="Kategorilere Dön"
+                            >
+                                <ChevronLeft size={16} />
+                                <span className="text-sm font-medium">Geri</span>
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setData({ channels: [], groups: {}, categories: { live: [], movie: [], series: [] } });
+                                    setSelectedChannel(null);
+                                    setSelectedGroup('All');
+                                    setSelectedCategory(null);
+                                }}
+                                className="bg-gray-800 hover:bg-gray-700 text-gray-200 p-2 rounded-lg border border-gray-700 shadow-sm transition-colors"
+                                title="Yeni playlist yükle"
+                            >
+                                <RefreshCw size={16} />
+                            </button>
+                        </div>
+
+                        <ChannelList
+                            channels={getDisplayedChannels()}
+                            selectedChannel={selectedChannel}
+                            onSelectChannel={handleChannelSelect}
+                            isPlaylistView={isPlaylistView}
+                        />
+
+                        <Player channel={selectedChannel} />
+                    </>
+                )
+            )
+            }
+        </div >
     );
 }
 
 export default App;
+
