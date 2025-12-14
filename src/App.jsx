@@ -235,8 +235,7 @@ function App() {
                         <div className="w-16 h-16 bg-orange-500 rounded-lg flex items-center justify-center mx-auto mb-6">
                             <Upload size={32} className="text-white" />
                         </div>
-                        <h1 className="text-2xl font-bold text-gray-900 mb-2">IPTV Player'a Hoş Geldiniz</h1>
-                        <p className="text-gray-600 mb-6">iptv-playlist-parser & HLS.js tabanlı</p>
+                        <h1 className="text-2xl font-bold text-gray-900 mb-6">IPTV Player'a Hoş Geldiniz</h1>
 
                         <label className="block w-full">
                             <span className="sr-only">M3U dosyası seçin</span>
