@@ -19,87 +19,134 @@ const Player = ({ channel }) => {
             hlsRef.current = null;
         }
 
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+        setError(null);
+        setIsLoading(false);
+
         if (!channel) {
-            video.src = '';
-            setError(null);
-            setIsLoading(false);
             return;
         }
 
-        // Skip playlist URLs
+        // Skip playlist URLs (nested m3u links)
         if (channel.url.includes('get.php') || channel.url.includes('type=m3u')) {
             return;
         }
 
-        const loadStream = async () => {
-            setIsLoading(true);
-            setError(null);
+        setIsLoading(true);
+        const url = channel.url;
+        console.log('Playing:', url);
 
-            // Timeout - if video doesn't load in 5 seconds, show error
-            const timeout = setTimeout(() => {
+        // Timeout for loading
+        const loadTimeout = setTimeout(() => {
+            setIsLoading(false);
+            if (!video.readyState) {
+                setError('Yükleme zaman aşımı - VLC ile deneyin');
+            }
+        }, 15000);
+
+        // Try HLS.js first (works for most IPTV streams)
+        if (Hls.isSupported()) {
+            console.log('Using HLS.js');
+            const hls = new Hls({
+                enableWorker: true,
+                lowLatencyMode: false,
+                fragLoadingTimeOut: 20000,
+                manifestLoadingTimeOut: 20000,
+                levelLoadingTimeOut: 20000,
+                fragLoadingMaxRetry: 3,
+                manifestLoadingMaxRetry: 3,
+            });
+            hlsRef.current = hls;
+
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                clearTimeout(loadTimeout);
+                console.log('HLS: Manifest parsed, playing...');
+                setIsLoading(false);
+                video.play().catch(e => console.warn('Autoplay blocked:', e));
+            });
+
+            hls.on(Hls.Events.FRAG_LOADED, () => {
                 if (isLoading) {
+                    clearTimeout(loadTimeout);
                     setIsLoading(false);
-                    setError('Stream yüklenemedi - VLC ile deneyin');
                 }
-            }, 5000);
+            });
 
-            try {
-                // Get proxy URL
-                const { ipcRenderer } = window.require('electron');
-                const proxyUrl = await ipcRenderer.invoke('get-proxy-url', channel.url);
-                console.log('Loading stream via proxy:', proxyUrl);
-
-                // Check if it's a video file
-                const isVideoFile = channel.url.includes('.mp4') || 
-                                   channel.url.includes('.mkv') || 
-                                   channel.url.includes('.avi') ||
-                                   channel.url.includes('/movie/') ||
-                                   channel.url.includes('/series/');
-
-                if (isVideoFile) {
-                    // Regular video file (MP4, MKV, etc.)
-                    console.log('Using native video for:', channel.url);
-                    video.src = proxyUrl;
+            hls.on(Hls.Events.ERROR, (_, data) => {
+                console.error('HLS Error:', data.type, data.details);
+                
+                if (data.fatal) {
+                    clearTimeout(loadTimeout);
                     
-                    video.onloadeddata = () => {
-                        clearTimeout(timeout);
-                        setIsLoading(false);
-                        video.play().catch(e => console.error('Autoplay error:', e));
-                    };
-
-                    video.onerror = () => {
-                        clearTimeout(timeout);
-                        setIsLoading(false);
-                        setError('Video formatı desteklenmiyor - VLC ile deneyin');
-                    };
-
-                    video.load();
-                } else {
-                    // Live TV - MPEG-TS format, browser doesn't support it
-                    // Auto-open in VLC
-                    clearTimeout(timeout);
-                    setIsLoading(false);
-                    
-                    // Automatically open in VLC for live streams
-                    try {
-                        await ipcRenderer.invoke('open-external-player', channel.url, 'vlc');
-                        setError('Canlı TV - VLC\'de açıldı');
-                    } catch (vlcError) {
-                        setError('Canlı TV - VLC ile izleyin');
+                    if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                        console.log('HLS: Recovering from media error...');
+                        hls.recoverMediaError();
+                    } else {
+                        // Network or other fatal error - try direct playback
+                        console.log('HLS failed, trying direct playback...');
+                        hls.destroy();
+                        hlsRef.current = null;
+                        
+                        // Try direct video src
+                        video.src = url;
+                        video.load();
+                        
+                        video.oncanplay = () => {
+                            setIsLoading(false);
+                            video.play().catch(e => console.warn('Autoplay blocked:', e));
+                        };
+                        
+                        video.onerror = () => {
+                            setIsLoading(false);
+                            setError('Stream oynatılamadı - VLC ile deneyin');
+                        };
                     }
                 }
+            });
 
-            } catch (err) {
-                clearTimeout(timeout);
-                console.error('Stream load error:', err);
+            hls.loadSource(url);
+            hls.attachMedia(video);
+            
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Safari native HLS support
+            console.log('Using native HLS (Safari)');
+            video.src = url;
+            
+            video.onloadedmetadata = () => {
+                clearTimeout(loadTimeout);
                 setIsLoading(false);
-                setError('Stream yüklenemedi');
-            }
-        };
-
-        loadStream();
+                video.play().catch(e => console.warn('Autoplay blocked:', e));
+            };
+            
+            video.onerror = () => {
+                clearTimeout(loadTimeout);
+                setIsLoading(false);
+                setError('Stream oynatılamadı - VLC ile deneyin');
+            };
+        } else {
+            // Fallback to direct playback
+            console.log('Using direct playback');
+            video.src = url;
+            
+            video.oncanplay = () => {
+                clearTimeout(loadTimeout);
+                setIsLoading(false);
+                video.play().catch(e => console.warn('Autoplay blocked:', e));
+            };
+            
+            video.onerror = () => {
+                clearTimeout(loadTimeout);
+                setIsLoading(false);
+                setError('Stream oynatılamadı - VLC ile deneyin');
+            };
+            
+            video.load();
+        }
 
         return () => {
+            clearTimeout(loadTimeout);
             if (hlsRef.current) {
                 hlsRef.current.destroy();
                 hlsRef.current = null;
@@ -109,9 +156,7 @@ const Player = ({ channel }) => {
 
     const copyUrl = () => {
         if (channel?.url) {
-            navigator.clipboard.writeText(channel.url).then(() => {
-                alert('URL kopyalandı!');
-            });
+            navigator.clipboard.writeText(channel.url);
         }
     };
 
@@ -120,8 +165,8 @@ const Player = ({ channel }) => {
             try {
                 const { ipcRenderer } = window.require('electron');
                 await ipcRenderer.invoke('open-external-player', channel.url, 'vlc');
-            } catch (error) {
-                console.error('Failed to open VLC:', error);
+            } catch (err) {
+                console.error('VLC error:', err);
             }
         }
     };

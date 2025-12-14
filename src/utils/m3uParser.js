@@ -1,9 +1,10 @@
 import { parse } from 'iptv-playlist-parser';
 
 // Detect content type from URL
-const detectContentType = (url, groupTitle) => {
+const detectContentType = (url, groupTitle, channelName) => {
     const lowerUrl = url.toLowerCase();
     const lowerGroup = (groupTitle || '').toLowerCase();
+    const lowerName = (channelName || '').toLowerCase();
 
     // Playlists (Nested M3U)
     if (lowerUrl.includes('type=m3u') ||
@@ -13,22 +14,29 @@ const detectContentType = (url, groupTitle) => {
         return 'playlist';
     }
 
-    // Movies
+    // Movies - check URL pattern AND group/name keywords
     if (lowerUrl.includes('/movie/') ||
         lowerGroup.includes('movie') ||
         lowerGroup.includes('film') ||
-        lowerGroup.includes('sinema')) {
+        lowerGroup.includes('sinema') ||
+        lowerGroup.includes('vod') ||
+        lowerName.includes('(movie)')) {
         return 'movie';
     }
 
-    // Series
+    // Series - check URL pattern AND group/name keywords
     if (lowerUrl.includes('/series/') ||
         lowerGroup.includes('series') ||
-        lowerGroup.includes('dizi')) {
+        lowerGroup.includes('dizi') ||
+        lowerGroup.includes('season') ||
+        lowerGroup.includes('episode') ||
+        lowerName.includes('s0') || lowerName.includes('e0') ||
+        /s\d{1,2}e\d{1,2}/i.test(channelName)) {
         return 'series';
     }
 
-    // Live TV (default for streams)
+    // Live TV - everything else (most IPTV streams are live)
+    // Standard IPTV URLs like http://server:port/user/pass/channelid are live
     return 'live';
 };
 
@@ -52,7 +60,7 @@ export const parseM3U = (content) => {
 
         const channels = result.items.map((item, index) => {
             const groupTitle = item.group?.title || 'Other';
-            const contentType = detectContentType(item.url, groupTitle);
+            const contentType = detectContentType(item.url, groupTitle, item.name);
 
             if (!groups[groupTitle]) {
                 groups[groupTitle] = [];
