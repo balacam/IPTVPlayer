@@ -8,6 +8,7 @@
         "dev": "vite",
         "build": "vite build",
         "preview": "vite preview",
+        "start": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .\"",
         "electron:start": "electron .",
         "electron:dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 npm run electron:start\"",
         "electron:build": "vite build && electron-builder"

@@ -20,6 +20,7 @@ const Player = ({ channel }) => {
         return saved ? parseFloat(saved) : 1;
     });
     const [isMuted, setIsMuted] = useState(false);
+    const [bufferInfo, setBufferInfo] = useState('');
 
     const destroyPlayers = useCallback(() => {
         if (retryTimeoutRef.current) {
@@ -39,17 +40,44 @@ const Player = ({ channel }) => {
     const playWithMpegts = useCallback((url, video) => {
         if (!mpegts.isSupported()) return false;
         
-        console.log('Using mpegts.js');
+        console.log('Using mpegts.js with aggressive buffering');
         const player = mpegts.createPlayer({
             type: 'mpegts',
             url: url,
             isLive: true,
+            hasAudio: true,
+            hasVideo: true,
         }, {
+            // Worker & Performance
             enableWorker: true,
             enableStashBuffer: true,
-            stashInitialSize: 1024 * 512,
+            
+            // Aggressive buffering like VLC (large buffers)
+            stashInitialSize: 1024 * 1024 * 2,  // 2MB initial buffer
+            
+            // Live stream settings - disable latency chasing for stability
+            isLive: true,
             liveBufferLatencyChasing: false,
+            liveBufferLatencyMaxLatency: 60,     // Allow up to 60 seconds latency
+            liveBufferLatencyMinRemain: 10,      // Keep at least 10 seconds buffer
+            
+            // Auto cleanup to prevent memory issues
             autoCleanupSourceBuffer: true,
+            autoCleanupMaxBackwardDuration: 120,  // Keep 2 minutes of backward buffer
+            autoCleanupMinBackwardDuration: 60,   // At least 1 minute backward
+            
+            // Loading behavior
+            lazyLoad: false,
+            lazyLoadMaxDuration: 0,
+            deferLoadAfterSourceOpen: false,
+            
+            // Fix audio/video sync issues
+            fixAudioTimestampGap: true,
+            accurateSeek: false,
+            
+            // Network settings
+            seekType: 'range',
+            reuseRedirectedURL: true,
         });
 
         mpegtsRef.current = player;
@@ -118,7 +146,7 @@ const Player = ({ channel }) => {
         return true;
     }, [playWithMpegts]);
 
-    const playChannel = useCallback((url) => {
+    const playChannel = useCallback((url, retryCount = 0) => {
         const video = videoRef.current;
         if (!video || !url) return;
 
@@ -129,35 +157,40 @@ const Player = ({ channel }) => {
         setError(null);
         setIsLoading(true);
 
-        console.log('Playing:', url);
+        console.log('Playing:', url, 'Retry:', retryCount);
 
         // Try HLS first, fallback to MPEG-TS
         if (!playWithHls(url, video)) {
             playWithMpegts(url, video);
         }
 
-        // Timeout
-        setTimeout(() => {
-            if (!video.readyState) {
+        // Auto-retry if not playing after 30 seconds (no timeout error, just retry)
+        retryTimeoutRef.current = setTimeout(() => {
+            if (video.readyState < 2 && retryCount < 3) {
+                console.log('Auto-retrying... attempt', retryCount + 1);
+                playChannel(url, retryCount + 1);
+            } else if (video.readyState < 2) {
+                // After 3 retries, show error but allow manual retry
                 setIsLoading(false);
-                setError('Yükleme zaman aşımı');
+                setError('Bağlantı kurulamadı - Tekrar deneyin veya VLC kullanın');
             }
-        }, 15000);
+        }, 30000);
     }, [destroyPlayers, playWithHls, playWithMpegts]);
 
-    // Auto-reload when video stalls
+    // Auto-reload when video stalls + buffer monitoring
     useEffect(() => {
         const video = videoRef.current;
         if (!video || !channel) return;
 
         const handleStalled = () => {
             console.log('Video stalled, will retry...');
+            setBufferInfo('Buffering...');
             retryTimeoutRef.current = setTimeout(() => {
                 if (channel?.url) {
                     console.log('Retrying after stall...');
                     playChannel(channel.url);
                 }
-            }, 3000);
+            }, 5000);
         };
 
         const handleEnded = () => {
@@ -167,12 +200,37 @@ const Player = ({ channel }) => {
             }
         };
 
+        const handleWaiting = () => {
+            setBufferInfo('Buffering...');
+        };
+
+        const handlePlaying = () => {
+            setBufferInfo('');
+            setIsLoading(false);
+        };
+
+        // Monitor buffer level
+        const bufferInterval = setInterval(() => {
+            if (video.buffered.length > 0) {
+                const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+                const bufferAhead = bufferedEnd - video.currentTime;
+                if (bufferAhead > 0) {
+                    setBufferInfo(`Buffer: ${bufferAhead.toFixed(1)}s`);
+                }
+            }
+        }, 2000);
+
         video.addEventListener('stalled', handleStalled);
         video.addEventListener('ended', handleEnded);
+        video.addEventListener('waiting', handleWaiting);
+        video.addEventListener('playing', handlePlaying);
 
         return () => {
+            clearInterval(bufferInterval);
             video.removeEventListener('stalled', handleStalled);
             video.removeEventListener('ended', handleEnded);
+            video.removeEventListener('waiting', handleWaiting);
+            video.removeEventListener('playing', handlePlaying);
         };
     }, [channel, playChannel]);
 
@@ -239,6 +297,7 @@ const Player = ({ channel }) => {
                     controls
                     autoPlay
                     playsInline
+                    preload="auto"
                     className="w-full h-full object-contain"
                     style={{ backgroundColor: '#000' }}
                 />
@@ -278,7 +337,10 @@ const Player = ({ channel }) => {
                 <div className="flex items-center justify-between gap-4">
                     <div className="flex-1 min-w-0">
                         <h2 className="text-sm font-semibold text-white truncate">{channel.name}</h2>
-                        <p className="text-xs text-gray-400 truncate">{channel.group}</p>
+                        <p className="text-xs text-gray-400 truncate">
+                            {channel.group}
+                            {bufferInfo && <span className="ml-2 text-orange-400">{bufferInfo}</span>}
+                        </p>
                     </div>
                     <div className="flex items-center gap-2">
                         <button onClick={() => setIsMuted(!isMuted)} className="text-gray-400 hover:text-white">
