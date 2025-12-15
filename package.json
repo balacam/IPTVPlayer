@@ -4,6 +4,25 @@
     "description": "Cross-platform IPTV Player app",
     "type": "module",
     "main": "electron/main.cjs",
+    "build": {
+        "appId": "com.iptvplayer.app",
+        "productName": "IPTV Player",
+        "directories": {
+            "output": "release"
+        },
+        "files": [
+            "dist/**/*",
+            "electron/**/*"
+        ],
+        "win": {
+            "target": "nsis",
+            "icon": "public/icon.ico"
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true
+        }
+    },
     "scripts": {
         "dev": "vite",
         "build": "vite build",
