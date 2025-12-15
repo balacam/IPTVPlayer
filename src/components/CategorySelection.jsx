@@ -1,5 +1,5 @@
 import React from 'react';
-import { Tv, Clapperboard, Film, Clock, ChevronLeft } from 'lucide-react';
+import { Tv, Clapperboard, Film, Clock, Upload } from 'lucide-react';
 
 const CategoryCard = ({ title, icon: Icon, color, onClick, count }) => (
     <button
@@ -30,11 +30,21 @@ const CategoryCard = ({ title, icon: Icon, color, onClick, count }) => (
     </button>
 );
 
-const CategorySelection = ({ categories, onSelectCategory }) => {
+const CategorySelection = ({ categories, onSelectCategory, onLoadNewPlaylist }) => {
     return (
         <div className="flex min-h-screen w-full flex-col bg-[#0f172a] p-8 animate-in fade-in duration-500">
             {/* Header */}
-            <div className="mb-12 text-center">
+            <div className="mb-12 text-center relative">
+                {/* Load New Playlist Button */}
+                <button
+                    onClick={onLoadNewPlaylist}
+                    className="absolute top-0 right-0 flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors"
+                    title="Load new playlist"
+                >
+                    <Upload size={18} />
+                    <span className="text-sm">New Playlist</span>
+                </button>
+                
                 <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 mb-2">
                     Categories
                 </h1>

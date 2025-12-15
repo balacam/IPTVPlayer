@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
 const https = require('https');
 const http = require('http');
 const path = require('path');
@@ -724,6 +724,9 @@ ipcMain.handle('stop-ffmpeg-transcode', async () => {
 });
 
 function createWindow() {
+    // Remove default menu bar
+    Menu.setApplicationMenu(null);
+    
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,

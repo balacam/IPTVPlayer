@@ -54,10 +54,25 @@ function App() {
         setSelectedChannel(null); // Clear player
 
         if (containsPlaylists) {
-            // Found nested playlists - show flat list, skip category screen
+            // Count how many playlist links we have
+            const playlistLinks = parsedData.channels.filter(ch => 
+                isPlaylistUrl(ch.url) || (ch.group && ch.group.toLowerCase().includes('playlist'))
+            );
+            
+            if (playlistLinks.length === 1) {
+                // Only 1 link - auto-open it
+                console.log('Only 1 playlist link found, auto-opening:', playlistLinks[0].name);
+                // We need to load this playlist - will be handled after state update
+                setTimeout(() => {
+                    handleChannelSelect(playlistLinks[0], false);
+                }, 100);
+                return; // Don't update state yet, handleChannelSelect will do it
+            }
+            
+            // Multiple links - show flat list
             setSelectedCategory('all');
             setIsPlaylistView(true);
-            console.log('Detected playlist directory - forcing flat view');
+            console.log('Detected playlist directory with', playlistLinks.length, 'links - showing flat view');
         } else {
             // Standard channels - show category selection
             setSelectedCategory(null);
@@ -292,6 +307,12 @@ function App() {
                     <CategorySelection
                         categories={data.categories}
                         onSelectCategory={setSelectedCategory}
+                        onLoadNewPlaylist={() => {
+                            setData({ channels: [], groups: {}, categories: { live: [], movie: [], series: [] } });
+                            setSelectedChannel(null);
+                            setSelectedGroup('All');
+                            setSelectedCategory(null);
+                        }}
                     />
                 ) : (
 
