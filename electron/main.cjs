@@ -2,8 +2,21 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const https = require('https');
 const http = require('http');
 const path = require('path');
-const { spawn } = require('child_process');
+const fs = require('fs');
+const { spawn, execSync } = require('child_process');
 const url = require('url');
+const AdmZip = require('adm-zip');
+
+// Embedded player process
+let embeddedPlayerProcess = null;
+let mainWindow = null;
+
+// FFmpeg transcoding
+let ffmpegPath = null;
+let ffmpegProcess = null;
+let hlsServer = null;
+const HLS_PORT = 9877;
+const HLS_DIR = path.join(app.getPath('temp'), 'iptv-hls');
 
 // Proxy server for IPTV streams
 let proxyServer = null;
@@ -138,27 +151,52 @@ ipcMain.handle('fetch-content', async (event, url) => {
     });
 });
 
+// Find VLC path
+function findVlcPath() {
+    const vlcPaths = [
+        'C:\\Program Files\\VideoLAN\\VLC\\vlc.exe',
+        'C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe',
+    ];
+    
+    const fs = require('fs');
+    for (const p of vlcPaths) {
+        if (fs.existsSync(p)) return p;
+    }
+    return null;
+}
+
+// Find MPV path
+function findMpvPath() {
+    const mpvPaths = [
+        'C:\\Program Files\\mpv\\mpv.exe',
+        'C:\\Program Files (x86)\\mpv\\mpv.exe',
+        path.join(app.getPath('userData'), 'mpv', 'mpv.exe'),
+    ];
+    
+    const fs = require('fs');
+    for (const p of mpvPaths) {
+        if (fs.existsSync(p)) return p;
+    }
+    
+    // Try to find in PATH
+    try {
+        execSync('where mpv', { encoding: 'utf8' });
+        return 'mpv';
+    } catch {
+        return null;
+    }
+}
+
 // IPC handler for opening external player
 ipcMain.handle('open-external-player', async (event, url, playerType = 'vlc') => {
     try {
         console.log(`Opening ${playerType} with URL:`, url);
         
         if (playerType === 'vlc') {
-            // Try different VLC paths
-            const vlcPaths = [
-                'C:\\Program Files\\VideoLAN\\VLC\\vlc.exe',
-                'C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe',
-                'vlc' // If VLC is in PATH
-            ];
-            
-            for (const vlcPath of vlcPaths) {
-                try {
-                    spawn(vlcPath, [url], { detached: true, stdio: 'ignore' });
-                    return { success: true, message: 'VLC opened successfully' };
-                } catch (error) {
-                    console.log(`Failed to open VLC at ${vlcPath}:`, error.message);
-                    continue;
-                }
+            const vlcPath = findVlcPath();
+            if (vlcPath) {
+                spawn(vlcPath, [url], { detached: true, stdio: 'ignore' });
+                return { success: true, message: 'VLC opened successfully' };
             }
             
             // If VLC not found, try to open with default app
@@ -176,8 +214,440 @@ ipcMain.handle('open-external-player', async (event, url, playerType = 'vlc') =>
     }
 });
 
+// IPC handler for embedded VLC player in a child window
+let vlcWindow = null;
+let vlcProcess = null;
+
+ipcMain.handle('play-embedded-vlc', async (event, streamUrl) => {
+    try {
+        const vlcPath = findVlcPath();
+        if (!vlcPath) {
+            return { success: false, message: 'VLC not found' };
+        }
+
+        // Kill existing VLC process
+        if (vlcProcess) {
+            try { vlcProcess.kill(); } catch {}
+            vlcProcess = null;
+        }
+
+        // Close existing VLC window
+        if (vlcWindow && !vlcWindow.isDestroyed()) {
+            vlcWindow.close();
+        }
+
+        // Create a new borderless window for VLC
+        vlcWindow = new BrowserWindow({
+            width: 800,
+            height: 500,
+            parent: mainWindow,
+            frame: false,
+            transparent: false,
+            backgroundColor: '#000000',
+            webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+            },
+            show: false,
+        });
+
+        // Get the native window handle
+        const hwnd = vlcWindow.getNativeWindowHandle();
+        // Convert buffer to hex string for VLC
+        const hwndInt = hwnd.readUInt32LE(0);
+        
+        console.log('VLC Window HWND:', hwndInt);
+
+        // Show window first
+        vlcWindow.show();
+
+        // Start VLC with embedded output
+        // VLC args: --drawable-hwnd=<hwnd> embeds video into that window
+        const vlcArgs = [
+            '--intf=dummy',           // No VLC interface
+            '--no-video-title-show',  // No title overlay
+            '--no-embedded-video',
+            `--drawable-hwnd=${hwndInt}`,
+            '--no-qt-fs-controller',
+            '--no-osd',
+            streamUrl
+        ];
+
+        console.log('Starting VLC with args:', vlcArgs);
+        
+        vlcProcess = spawn(vlcPath, vlcArgs, {
+            stdio: 'ignore',
+            windowsHide: true,
+        });
+
+        vlcProcess.on('error', (err) => {
+            console.error('VLC process error:', err);
+        });
+
+        vlcProcess.on('exit', (code) => {
+            console.log('VLC process exited with code:', code);
+            vlcProcess = null;
+        });
+
+        // Position VLC window
+        if (mainWindow) {
+            const mainBounds = mainWindow.getBounds();
+            vlcWindow.setBounds({
+                x: mainBounds.x + 460,  // After channel list
+                y: mainBounds.y + 30,
+                width: mainBounds.width - 470,
+                height: mainBounds.height - 100,
+            });
+        }
+
+        return { success: true, message: 'VLC embedded started' };
+    } catch (error) {
+        console.error('Failed to start embedded VLC:', error);
+        return { success: false, message: error.message };
+    }
+});
+
+ipcMain.handle('stop-embedded-vlc', async () => {
+    if (vlcProcess) {
+        try { vlcProcess.kill(); } catch {}
+        vlcProcess = null;
+    }
+    if (vlcWindow && !vlcWindow.isDestroyed()) {
+        vlcWindow.close();
+        vlcWindow = null;
+    }
+    return { success: true };
+});
+
+ipcMain.handle('get-player-info', async () => {
+    return {
+        vlcAvailable: !!findVlcPath(),
+        mpvAvailable: !!findMpvPath(),
+        ffmpegAvailable: !!ffmpegPath,
+        vlcPath: findVlcPath(),
+        mpvPath: findMpvPath(),
+        ffmpegPath: ffmpegPath,
+    };
+});
+
+// ============ FFmpeg Transcoding Support ============
+
+// Find or download FFmpeg
+async function findOrDownloadFFmpeg() {
+    const ffmpegDir = path.join(app.getPath('userData'), 'ffmpeg');
+    const ffmpegExe = path.join(ffmpegDir, 'ffmpeg.exe');
+    
+    // Check common paths first
+    const commonPaths = [
+        ffmpegExe,
+        'C:\\ffmpeg\\bin\\ffmpeg.exe',
+        'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+        path.join(process.resourcesPath || '', 'ffmpeg.exe'),
+    ];
+    
+    for (const p of commonPaths) {
+        if (fs.existsSync(p)) {
+            console.log('FFmpeg found at:', p);
+            ffmpegPath = p;
+            return p;
+        }
+    }
+    
+    // Try PATH
+    try {
+        execSync('where ffmpeg', { encoding: 'utf8' });
+        ffmpegPath = 'ffmpeg';
+        console.log('FFmpeg found in PATH');
+        return 'ffmpeg';
+    } catch {}
+    
+    console.log('FFmpeg not found, will download when needed');
+    return null;
+}
+
+// Download FFmpeg
+async function downloadFFmpeg(progressCallback) {
+    const ffmpegDir = path.join(app.getPath('userData'), 'ffmpeg');
+    const ffmpegExe = path.join(ffmpegDir, 'ffmpeg.exe');
+    const zipPath = path.join(ffmpegDir, 'ffmpeg.zip');
+    
+    // Create directory
+    if (!fs.existsSync(ffmpegDir)) {
+        fs.mkdirSync(ffmpegDir, { recursive: true });
+    }
+    
+    // Download URL (using gyan.dev builds - reliable Windows builds)
+    const downloadUrl = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip';
+    
+    console.log('Downloading FFmpeg from:', downloadUrl);
+    progressCallback && progressCallback({ status: 'downloading', progress: 0 });
+    
+    return new Promise((resolve, reject) => {
+        const file = fs.createWriteStream(zipPath);
+        
+        const download = (url) => {
+            https.get(url, (response) => {
+                // Handle redirects
+                if (response.statusCode === 302 || response.statusCode === 301) {
+                    download(response.headers.location);
+                    return;
+                }
+                
+                const totalSize = parseInt(response.headers['content-length'], 10);
+                let downloadedSize = 0;
+                
+                response.on('data', (chunk) => {
+                    downloadedSize += chunk.length;
+                    const progress = Math.round((downloadedSize / totalSize) * 100);
+                    progressCallback && progressCallback({ status: 'downloading', progress });
+                });
+                
+                response.pipe(file);
+                
+                file.on('finish', () => {
+                    file.close();
+                    progressCallback && progressCallback({ status: 'extracting', progress: 100 });
+                    
+                    try {
+                        console.log('Extracting FFmpeg...');
+                        const zip = new AdmZip(zipPath);
+                        const entries = zip.getEntries();
+                        
+                        // Find ffmpeg.exe in the zip
+                        for (const entry of entries) {
+                            if (entry.entryName.endsWith('ffmpeg.exe')) {
+                                zip.extractEntryTo(entry, ffmpegDir, false, true);
+                                break;
+                            }
+                        }
+                        
+                        // Clean up zip
+                        fs.unlinkSync(zipPath);
+                        
+                        if (fs.existsSync(ffmpegExe)) {
+                            ffmpegPath = ffmpegExe;
+                            console.log('FFmpeg installed at:', ffmpegExe);
+                            progressCallback && progressCallback({ status: 'complete', progress: 100 });
+                            resolve(ffmpegExe);
+                        } else {
+                            reject(new Error('FFmpeg extraction failed'));
+                        }
+                    } catch (err) {
+                        reject(err);
+                    }
+                });
+            }).on('error', (err) => {
+                fs.unlink(zipPath, () => {});
+                reject(err);
+            });
+        };
+        
+        download(downloadUrl);
+    });
+}
+
+// IPC handler for FFmpeg status
+ipcMain.handle('get-ffmpeg-status', async () => {
+    return {
+        available: !!ffmpegPath,
+        path: ffmpegPath,
+    };
+});
+
+// IPC handler to download FFmpeg
+ipcMain.handle('download-ffmpeg', async (event) => {
+    try {
+        const result = await downloadFFmpeg((progress) => {
+            mainWindow && mainWindow.webContents.send('ffmpeg-download-progress', progress);
+        });
+        return { success: true, path: result };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+// Start HLS server for serving transcoded content
+function startHLSServer() {
+    // Create HLS directory
+    if (!fs.existsSync(HLS_DIR)) {
+        fs.mkdirSync(HLS_DIR, { recursive: true });
+    }
+    
+    hlsServer = http.createServer((req, res) => {
+        const reqPath = req.url.split('?')[0];
+        const filePath = path.join(HLS_DIR, reqPath);
+        
+        // Security check
+        if (!filePath.startsWith(HLS_DIR)) {
+            res.writeHead(403);
+            res.end('Forbidden');
+            return;
+        }
+        
+        // CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Cache-Control', 'no-cache');
+        
+        if (req.method === 'OPTIONS') {
+            res.writeHead(200);
+            res.end();
+            return;
+        }
+        
+        fs.stat(filePath, (err, stat) => {
+            if (err) {
+                res.writeHead(404);
+                res.end('Not found');
+                return;
+            }
+            
+            // Set content type
+            let contentType = 'application/octet-stream';
+            if (filePath.endsWith('.m3u8')) {
+                contentType = 'application/x-mpegURL';
+            } else if (filePath.endsWith('.ts')) {
+                contentType = 'video/MP2T';
+            }
+            
+            res.writeHead(200, {
+                'Content-Type': contentType,
+                'Content-Length': stat.size,
+            });
+            
+            fs.createReadStream(filePath).pipe(res);
+        });
+    });
+    
+    hlsServer.listen(HLS_PORT, '127.0.0.1', () => {
+        console.log(`HLS server running on http://127.0.0.1:${HLS_PORT}`);
+    });
+}
+
+// Clean HLS directory
+function cleanHLSDir() {
+    if (fs.existsSync(HLS_DIR)) {
+        const files = fs.readdirSync(HLS_DIR);
+        for (const file of files) {
+            fs.unlinkSync(path.join(HLS_DIR, file));
+        }
+    }
+}
+
+// Start FFmpeg transcoding
+ipcMain.handle('start-ffmpeg-transcode', async (event, streamUrl) => {
+    if (!ffmpegPath) {
+        return { success: false, error: 'FFmpeg not available' };
+    }
+    
+    // Stop existing process
+    if (ffmpegProcess) {
+        try { ffmpegProcess.kill('SIGKILL'); } catch {}
+        ffmpegProcess = null;
+    }
+    
+    // Clean old files
+    cleanHLSDir();
+    
+    const outputPath = path.join(HLS_DIR, 'stream.m3u8');
+    
+    // FFmpeg arguments for HLS transcoding
+    const args = [
+        '-y',
+        '-loglevel', 'warning',
+        '-fflags', '+igndts',
+        '-analyzeduration', '5000000',
+        '-probesize', '5000000',
+        '-i', streamUrl,
+        '-c:v', 'copy',           // Copy video (no transcode if possible)
+        '-c:a', 'aac',            // Transcode audio to AAC (browser compatible)
+        '-b:a', '128k',
+        '-ac', '2',
+        '-f', 'hls',
+        '-hls_time', '2',
+        '-hls_list_size', '10',
+        '-hls_flags', 'delete_segments+omit_endlist',
+        '-hls_segment_filename', path.join(HLS_DIR, 'segment%03d.ts'),
+        outputPath
+    ];
+    
+    console.log('Starting FFmpeg:', ffmpegPath, args.join(' '));
+    
+    return new Promise((resolve) => {
+        ffmpegProcess = spawn(ffmpegPath, args, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        
+        let started = false;
+        let errorOutput = '';
+        
+        ffmpegProcess.stderr.on('data', (data) => {
+            const msg = data.toString();
+            errorOutput += msg;
+            console.log('FFmpeg:', msg);
+            
+            // Check if we need to transcode video too
+            if (msg.includes('Video codec') && (msg.includes('mpeg2') || msg.includes('mpeg4'))) {
+                console.log('Detected incompatible video codec, will transcode');
+            }
+        });
+        
+        ffmpegProcess.on('error', (err) => {
+            console.error('FFmpeg error:', err);
+            if (!started) {
+                resolve({ success: false, error: err.message });
+            }
+        });
+        
+        ffmpegProcess.on('exit', (code) => {
+            console.log('FFmpeg exited with code:', code);
+            ffmpegProcess = null;
+            if (!started) {
+                resolve({ success: false, error: 'FFmpeg exited: ' + errorOutput.slice(-500) });
+            }
+        });
+        
+        // Wait for m3u8 file to be created
+        const checkInterval = setInterval(() => {
+            if (fs.existsSync(outputPath)) {
+                const stat = fs.statSync(outputPath);
+                if (stat.size > 0) {
+                    clearInterval(checkInterval);
+                    started = true;
+                    resolve({
+                        success: true,
+                        hlsUrl: `http://127.0.0.1:${HLS_PORT}/stream.m3u8`,
+                    });
+                }
+            }
+        }, 500);
+        
+        // Timeout after 30 seconds
+        setTimeout(() => {
+            if (!started) {
+                clearInterval(checkInterval);
+                if (ffmpegProcess) {
+                    ffmpegProcess.kill('SIGKILL');
+                    ffmpegProcess = null;
+                }
+                resolve({ success: false, error: 'Timeout waiting for stream' });
+            }
+        }, 30000);
+    });
+});
+
+// Stop FFmpeg transcoding
+ipcMain.handle('stop-ffmpeg-transcode', async () => {
+    if (ffmpegProcess) {
+        try { ffmpegProcess.kill('SIGKILL'); } catch {}
+        ffmpegProcess = null;
+    }
+    cleanHLSDir();
+    return { success: true };
+});
+
 function createWindow() {
-    const win = new BrowserWindow({
+    mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
         webPreferences: {
@@ -188,6 +658,8 @@ function createWindow() {
             experimentalFeatures: true
         }
     });
+    
+    const win = mainWindow;
 
     // Disable CORS completely
     win.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
@@ -216,9 +688,15 @@ function createWindow() {
     }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     // Start proxy server first
     startProxyServer();
+    
+    // Start HLS server for FFmpeg output
+    startHLSServer();
+    
+    // Check for FFmpeg
+    await findOrDownloadFFmpeg();
     
     createWindow();
 
@@ -230,6 +708,12 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+    // Clean up FFmpeg process
+    if (ffmpegProcess) {
+        try { ffmpegProcess.kill('SIGKILL'); } catch {}
+    }
+    cleanHLSDir();
+    
     if (process.platform !== 'darwin') {
         app.quit();
     }

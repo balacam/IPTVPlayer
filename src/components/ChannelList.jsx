@@ -69,7 +69,7 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
     // Group channels
     const groupedChannels = useMemo(() => {
         return filteredChannels.reduce((acc, channel) => {
-            const groupName = isPlaylistView ? 'Tümü' : (channel.group || 'Diğer');
+            const groupName = isPlaylistView ? 'All' : (channel.group || 'Other');
             if (!acc[groupName]) acc[groupName] = [];
             acc[groupName].push(channel);
             return acc;
@@ -157,14 +157,14 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
                     <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
                     <input
                         type="text"
-                        placeholder="Kanal ara..."
+                        placeholder="Search channels..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-orange-500"
                     />
                 </div>
                 <div className="mt-2 text-xs text-gray-500">
-                    {filteredChannels.length} kanal {searchTerm && `("${searchTerm}" için)`}
+                    {filteredChannels.length} channels {searchTerm && `(for "${searchTerm}")`}
                 </div>
             </div>
 
@@ -173,7 +173,7 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
                 {flatList.length === 0 ? (
                     <div className="p-12 text-gray-500 text-sm text-center flex flex-col items-center justify-center h-full">
                         <span className="text-4xl mb-4">📺</span>
-                        <p>Kanal bulunamadı.</p>
+                        <p>No channels found.</p>
                     </div>
                 ) : (
                     <AutoSizer>

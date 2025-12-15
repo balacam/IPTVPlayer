@@ -23,6 +23,7 @@
     "author": "",
     "license": "ISC",
     "dependencies": {
+        "adm-zip": "^0.5.16",
         "hls.js": "^1.6.15",
         "iptv-playlist-parser": "^0.13.0",
         "lucide-react": "^0.292.0",

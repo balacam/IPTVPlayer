@@ -117,15 +117,15 @@ function App() {
                 console.error("Failed to load nested playlist:", error);
 
                 const errorMsg = error.message.includes('timeout')
-                    ? 'Bağlantı zaman aşımına uğradı. Tekrar deneyin.'
+                    ? 'Connection timed out. Please try again.'
                     : error.message.includes('CORS')
-                        ? 'Sunucu erişim hatası. Bu playlist desteklenmiyor olabilir.'
-                        : `Playlist yüklenemedi: ${error.message}`;
+                        ? 'Server access error. This playlist may not be supported.'
+                        : `Failed to load playlist: ${error.message}`;
 
                 console.warn('User-friendly error:', errorMsg);
 
                 setTimeout(() => {
-                    if (confirm(`${errorMsg}\n\nTekrar denemek ister misiniz?`)) {
+                    if (confirm(`${errorMsg}\n\nWould you like to try again?`)) {
                         handleChannelSelect(channel);
                     }
                 }, 100);
@@ -219,10 +219,10 @@ function App() {
                             style={{ color: '#f97316', marginBottom: '24px' }}
                         />
                         <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1f2937', marginBottom: '8px' }}>
-                            Playlist Yükleniyor...
+                            Loading Playlist...
                         </div>
                         <div style={{ fontSize: '14px', color: '#6b7280' }}>
-                            Lütfen bekleyin
+                            Please wait
                         </div>
                     </div>
                 </div>
@@ -235,25 +235,22 @@ function App() {
                         <div className="w-16 h-16 bg-orange-500 rounded-lg flex items-center justify-center mx-auto mb-6">
                             <Upload size={32} className="text-white" />
                         </div>
-                        <h1 className="text-2xl font-bold text-gray-900 mb-6">IPTV Player'a Hoş Geldiniz</h1>
+                        <h1 className="text-2xl font-bold text-gray-900 mb-6">Welcome to IPTV Player</h1>
 
-                        <label className="block w-full">
-                            <span className="sr-only">M3U dosyası seçin</span>
+                        <label className="block w-full cursor-pointer">
                             <input
                                 type="file"
                                 accept=".m3u,.m3u8"
                                 onChange={handleFileUpload}
-                                className="block w-full text-sm text-gray-600
-                  file:mr-4 file:py-2.5 file:px-4
-                  file:rounded-lg file:border-0
-                  file:text-sm file:font-semibold
-                  file:bg-orange-500 file:text-white
-                  hover:file:bg-orange-600
-                  cursor-pointer bg-gray-50 rounded-lg border border-gray-200"
+                                className="hidden"
                             />
+                            <div className="flex items-center justify-center gap-3 bg-orange-500 hover:bg-orange-600 text-white py-3 px-6 rounded-lg font-semibold transition-colors">
+                                <Upload size={20} />
+                                Select Playlist File
+                            </div>
                         </label>
                         <p className="mt-4 text-xs text-gray-500">
-                            .m3u ve .m3u8 playlist dosyalarını destekler
+                            Supports .m3u and .m3u8 playlist files
                         </p>
                     </div>
                 </div>
@@ -274,10 +271,10 @@ function App() {
                             <button
                                 onClick={() => setSelectedCategory(null)}
                                 className="bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2 rounded-lg border border-gray-700 shadow-sm transition-colors flex items-center gap-2"
-                                title="Kategorilere Dön"
+                                title="Back to Categories"
                             >
                                 <ChevronLeft size={16} />
-                                <span className="text-sm font-medium">Geri</span>
+                                <span className="text-sm font-medium">Back</span>
                             </button>
                             <button
                                 onClick={() => {
@@ -287,7 +284,7 @@ function App() {
                                     setSelectedCategory(null);
                                 }}
                                 className="bg-gray-800 hover:bg-gray-700 text-gray-200 p-2 rounded-lg border border-gray-700 shadow-sm transition-colors"
-                                title="Yeni playlist yükle"
+                                title="Load new playlist"
                             >
                                 <RefreshCw size={16} />
                             </button>

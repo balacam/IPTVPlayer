@@ -20,7 +20,7 @@ const CategoryCard = ({ title, icon: Icon, color, onClick, count }) => (
             </h3>
             {count !== undefined && (
                 <span className="mt-2 block text-sm font-medium text-white/90">
-                    {count} İçerik
+                    {count} Items
                 </span>
             )}
         </div>
@@ -36,9 +36,9 @@ const CategorySelection = ({ categories, onSelectCategory }) => {
             {/* Header */}
             <div className="mb-12 text-center">
                 <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 mb-2">
-                    Kategoriler
+                    Categories
                 </h1>
-                <p className="text-gray-400">İzlemek istediğiniz içerik türünü seçin</p>
+                <p className="text-gray-400">Select the content type you want to watch</p>
             </div>
 
             {/* Grid */}
