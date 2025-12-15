@@ -258,7 +258,7 @@ function App() {
 
             {/* Main Layout - Show when data is loaded */}
             {data.channels.length > 0 && (
-                selectedCategory === null ? (
+                selectedCategory === null && !isPlaylistView ? (
                     <CategorySelection
                         categories={data.categories}
                         onSelectCategory={setSelectedCategory}
@@ -269,7 +269,11 @@ function App() {
                         {/* Control Buttons */}
                         <div className="absolute top-4 right-4 z-40 flex gap-2">
                             <button
-                                onClick={() => setSelectedCategory(null)}
+                                onClick={() => {
+                                    setSelectedCategory(null);
+                                    setIsPlaylistView(false);
+                                    setSelectedChannel(null);
+                                }}
                                 className="bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2 rounded-lg border border-gray-700 shadow-sm transition-colors flex items-center gap-2"
                                 title="Back to Categories"
                             >

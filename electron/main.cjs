@@ -552,6 +552,7 @@ ipcMain.handle('start-ffmpeg-transcode', async (event, streamUrl) => {
     const outputPath = path.join(HLS_DIR, 'stream.m3u8');
     
     // FFmpeg arguments for HLS transcoding
+    // Using append_list instead of delete_segments to avoid permission errors
     const args = [
         '-y',
         '-loglevel', 'warning',
@@ -564,9 +565,9 @@ ipcMain.handle('start-ffmpeg-transcode', async (event, streamUrl) => {
         '-b:a', '128k',
         '-ac', '2',
         '-f', 'hls',
-        '-hls_time', '2',
-        '-hls_list_size', '10',
-        '-hls_flags', 'delete_segments+omit_endlist',
+        '-hls_time', '4',         // Longer segments for stability
+        '-hls_list_size', '5',    // Keep fewer segments in playlist
+        '-hls_flags', 'append_list+omit_endlist',  // Don't delete segments (avoid permission errors)
         '-hls_segment_filename', path.join(HLS_DIR, 'segment%03d.ts'),
         outputPath
     ];
