@@ -385,13 +385,22 @@ const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip })
                     {isVlcMode ? 'Opens channels in external VLC' : 'FFmpeg transcoding (built-in player)'}
                 </p>
                 
-                {/* FFmpeg Status - compact */}
+                {/* FFmpeg Status with Progress Bar */}
                 {ffmpegStatus.downloading && (
-                    <div className="mt-4 bg-gray-800 rounded-lg px-4 py-2 flex items-center gap-2">
-                        <Loader className="animate-spin text-purple-500" size={16} />
-                        <span className="text-sm text-gray-300">
-                            {ffmpegStatus.status === 'extracting' ? 'Installing FFmpeg...' : `Downloading FFmpeg ${ffmpegStatus.progress}%`}
-                        </span>
+                    <div className="mt-4 bg-gray-800 rounded-lg px-4 py-3 w-64">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Loader className="animate-spin text-purple-500" size={16} />
+                            <span className="text-sm text-gray-300">
+                                {ffmpegStatus.status === 'extracting' ? 'FFmpeg kuruluyor...' : 'FFmpeg indiriliyor...'}
+                            </span>
+                            <span className="text-sm text-purple-400 ml-auto">{ffmpegStatus.progress || 0}%</span>
+                        </div>
+                        <div className="w-full bg-gray-700 rounded-full h-2">
+                            <div 
+                                className="bg-purple-500 h-2 rounded-full transition-all duration-300"
+                                style={{ width: `${ffmpegStatus.progress || 0}%` }}
+                            />
+                        </div>
                     </div>
                 )}
             </div>
@@ -430,7 +439,25 @@ const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip })
                         <div className="text-center p-6">
                             <AlertCircle className="text-red-500 mx-auto mb-3" size={48} />
                             <p className="text-white text-lg mb-4">{error}</p>
-                            {autoSkipEnabled && (
+                            
+                            {/* FFmpeg Download Progress */}
+                            {ffmpegStatus.downloading && (
+                                <div className="mb-4 w-64 mx-auto">
+                                    <div className="flex justify-between text-sm text-gray-300 mb-1">
+                                        <span>{ffmpegStatus.status === 'extracting' ? 'Kuruluyor...' : 'İndiriliyor...'}</span>
+                                        <span>{ffmpegStatus.progress || 0}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-700 rounded-full h-2.5">
+                                        <div 
+                                            className="bg-purple-500 h-2.5 rounded-full transition-all duration-300"
+                                            style={{ width: `${ffmpegStatus.progress || 0}%` }}
+                                        />
+                                    </div>
+                                    <p className="text-xs text-gray-400 mt-2">FFmpeg indiriliyor, lütfen bekleyin...</p>
+                                </div>
+                            )}
+                            
+                            {autoSkipEnabled && !ffmpegStatus.downloading && (
                                 <p className="text-yellow-400 text-sm mb-4 flex items-center justify-center gap-2">
                                     <SkipForward size={16} /> Skipping to next channel in 3s...
                                 </p>

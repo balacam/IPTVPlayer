@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { FixedSizeList as List } from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
-import { ChevronDown, ChevronRight, Folder, FolderOpen, Search } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder, FolderOpen, Search, Trash2 } from 'lucide-react';
 
 // Global logo cache
 const logoCache = new Map();
@@ -51,10 +51,40 @@ const ChannelLogo = ({ logo }) => {
     );
 };
 
-const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistView }) => {
+const ChannelList = ({ channels, selectedChannel, onSelectChannel, onDeleteChannel, isPlaylistView, canDelete }) => {
     const [expandedGroups, setExpandedGroups] = useState({});
     const [searchTerm, setSearchTerm] = useState('');
+    const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, channel: null });
     const listRef = useRef(null);
+    const contextMenuRef = useRef(null);
+
+    // Close context menu when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (contextMenuRef.current && !contextMenuRef.current.contains(e.target)) {
+                setContextMenu({ visible: false, x: 0, y: 0, channel: null });
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const handleContextMenu = useCallback((e, channel) => {
+        e.preventDefault();
+        setContextMenu({
+            visible: true,
+            x: e.clientX,
+            y: e.clientY,
+            channel
+        });
+    }, []);
+
+    const handleDeleteClick = useCallback(() => {
+        if (contextMenu.channel && onDeleteChannel) {
+            onDeleteChannel(contextMenu.channel);
+        }
+        setContextMenu({ visible: false, x: 0, y: 0, channel: null });
+    }, [contextMenu.channel, onDeleteChannel]);
 
     // Filter channels by search
     const filteredChannels = useMemo(() => {
@@ -133,7 +163,8 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
                     isSelected ? 'bg-blue-600/20 border-l-4 border-l-blue-500' : 'hover:bg-gray-800/50 border-l-4 border-l-transparent'
                 }`}
                 onClick={() => onSelectChannel(channel, false)}
-                onDoubleClick={() => onSelectChannel(channel, true)}>
+                onDoubleClick={() => onSelectChannel(channel, true)}
+                onContextMenu={(e) => handleContextMenu(e, channel)}>
                 <ChannelLogo logo={channel.logo} />
                 <div className="flex-1 min-w-0">
                     <div className={`font-medium text-sm truncate ${isSelected ? 'text-blue-100' : 'text-gray-200'}`}>
@@ -146,11 +177,28 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
                 </span>
             </div>
         );
-    }, [flatList, expandedGroups, selectedChannel, onSelectChannel, toggleGroup]);
+    }, [flatList, expandedGroups, selectedChannel, onSelectChannel, toggleGroup, handleContextMenu]);
 
 
     return (
-        <div className="w-[450px] bg-[#0f172a] border-r border-gray-800 h-full flex flex-col">
+        <div className="w-[450px] bg-[#0f172a] border-r border-gray-800 h-full flex flex-col relative">
+            {/* Context Menu */}
+            {contextMenu.visible && canDelete && (
+                <div
+                    ref={contextMenuRef}
+                    className="fixed bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 z-50 min-w-[160px]"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                >
+                    <button
+                        onClick={handleDeleteClick}
+                        className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-900/30 flex items-center gap-2 transition-colors"
+                    >
+                        <Trash2 size={14} />
+                        Kanalı Sil
+                    </button>
+                </div>
+            )}
+
             {/* Search */}
             <div className="p-3 border-b border-gray-800">
                 <div className="relative">

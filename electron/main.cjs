@@ -135,6 +135,56 @@ ipcMain.handle('get-proxy-url', (event, streamUrl) => {
     return `http://127.0.0.1:${PROXY_PORT}/stream?url=${encodeURIComponent(streamUrl)}`;
 });
 
+// IPC handler for deleting a channel from M3U file
+ipcMain.handle('delete-channel-from-file', async (event, filePath, channelName, channelUrl) => {
+    try {
+        console.log('Deleting channel from file:', filePath);
+        console.log('Channel name:', channelName);
+        console.log('Channel URL:', channelUrl);
+
+        if (!fs.existsSync(filePath)) {
+            return { success: false, error: 'File not found' };
+        }
+
+        const content = fs.readFileSync(filePath, 'utf8');
+        const lines = content.split(/\r?\n/);
+        const newLines = [];
+        let skipNext = false;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+
+            if (skipNext) {
+                // This is the URL line after #EXTINF, skip it
+                skipNext = false;
+                continue;
+            }
+
+            // Check if this is the #EXTINF line for the channel we want to delete
+            if (line.startsWith('#EXTINF')) {
+                // Check if next line matches the URL
+                const nextLine = lines[i + 1] || '';
+                if (nextLine.trim() === channelUrl.trim()) {
+                    // Found the channel to delete, skip this line and the next
+                    skipNext = true;
+                    continue;
+                }
+            }
+
+            newLines.push(line);
+        }
+
+        // Write back to file
+        fs.writeFileSync(filePath, newLines.join('\n'), 'utf8');
+        console.log('Channel deleted successfully');
+
+        return { success: true };
+    } catch (error) {
+        console.error('Failed to delete channel:', error);
+        return { success: false, error: error.message };
+    }
+});
+
 // IPC handler for fetching content (bypasses CORS)
 ipcMain.handle('fetch-content', async (event, url) => {
     return new Promise((resolve, reject) => {

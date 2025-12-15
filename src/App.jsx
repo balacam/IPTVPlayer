@@ -13,6 +13,7 @@ function App() {
     const [isLoading, setIsLoading] = useState(false);
     const [selectedCategory, setSelectedCategory] = useState(null); // null = show category screen
     const [isPlaylistView, setIsPlaylistView] = useState(false); // true if showing a list of playlists (flat view)
+    const [currentPlaylistPath, setCurrentPlaylistPath] = useState(null); // Track the current M3U file path
     const [autoSkipEnabled, setAutoSkipEnabled] = useState(() => {
         return localStorage.getItem('auto-skip-enabled') === 'true';
     });
@@ -161,6 +162,9 @@ function App() {
         const file = event.target.files[0];
         if (!file) return;
 
+        // Store the file path for later use (deletion)
+        setCurrentPlaylistPath(file.path || null);
+
         const reader = new FileReader();
         reader.onload = (e) => {
             const content = e.target.result;
@@ -168,6 +172,52 @@ function App() {
             processPlaylistData(parsedData);
         };
         reader.readAsText(file);
+    };
+
+    const handleDeleteChannel = async (channel) => {
+        if (!currentPlaylistPath) {
+            alert('Dosya yolu bulunamadı. Kanal silinemedi.');
+            return;
+        }
+
+        const confirmDelete = confirm(`"${channel.name}" kanalını silmek istediğinizden emin misiniz?\n\nBu işlem dosyadan kalıcı olarak silinecektir.`);
+        if (!confirmDelete) return;
+
+        try {
+            const { ipcRenderer } = window.require('electron');
+            const result = await ipcRenderer.invoke('delete-channel-from-file', currentPlaylistPath, channel.name, channel.url);
+
+            if (result.success) {
+                // Remove from local state
+                setData(prevData => {
+                    const newChannels = prevData.channels.filter(ch => ch.id !== channel.id);
+                    const newGroups = {};
+                    const newCategories = { live: [], movie: [], series: [], playlist: [] };
+
+                    newChannels.forEach((ch, index) => {
+                        ch.id = index; // Re-index
+                        const groupName = ch.group || 'Other';
+                        if (!newGroups[groupName]) newGroups[groupName] = [];
+                        newGroups[groupName].push(ch);
+
+                        if (!newCategories[ch.type]) newCategories[ch.type] = [];
+                        newCategories[ch.type].push(ch);
+                    });
+
+                    return { channels: newChannels, groups: newGroups, categories: newCategories };
+                });
+
+                // Clear selection if deleted channel was selected
+                if (selectedChannel?.id === channel.id) {
+                    setSelectedChannel(null);
+                }
+            } else {
+                alert('Kanal silinemedi: ' + (result.error || 'Bilinmeyen hata'));
+            }
+        } catch (error) {
+            console.error('Delete channel error:', error);
+            alert('Kanal silinirken hata oluştu: ' + error.message);
+        }
     };
 
     const getDisplayedChannels = () => {
@@ -349,7 +399,9 @@ function App() {
                             channels={getDisplayedChannels()}
                             selectedChannel={selectedChannel}
                             onSelectChannel={handleChannelSelect}
+                            onDeleteChannel={handleDeleteChannel}
                             isPlaylistView={isPlaylistView}
+                            canDelete={!!currentPlaylistPath}
                         />
 
                         <Player 

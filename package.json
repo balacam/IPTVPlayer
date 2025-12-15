@@ -1,12 +1,12 @@
 {
-    "name": "iptv-player",
+    "name": "tvbox",
     "version": "1.0.0",
     "description": "Cross-platform IPTV Player app",
     "type": "module",
     "main": "electron/main.cjs",
     "build": {
-        "appId": "com.iptvplayer.app",
-        "productName": "IPTV Player",
+        "appId": "com.tvbox.app",
+        "productName": "TVBox",
         "directories": {
             "output": "release"
         },
@@ -16,11 +16,17 @@
         ],
         "win": {
             "target": "nsis",
-            "icon": "public/icon.ico"
+            "icon": "TVBox.png"
         },
         "nsis": {
             "oneClick": false,
             "allowToChangeInstallationDirectory": true
+        },
+        "mac": {
+            "icon": "TVBox.png"
+        },
+        "linux": {
+            "icon": "TVBox.png"
         }
     },
     "scripts": {
