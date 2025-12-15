@@ -13,6 +13,9 @@ function App() {
     const [isLoading, setIsLoading] = useState(false);
     const [selectedCategory, setSelectedCategory] = useState(null); // null = show category screen
     const [isPlaylistView, setIsPlaylistView] = useState(false); // true if showing a list of playlists (flat view)
+    const [autoSkipEnabled, setAutoSkipEnabled] = useState(() => {
+        return localStorage.getItem('auto-skip-enabled') === 'true';
+    });
 
     const openInVLC = async (url) => {
         try {
@@ -185,6 +188,33 @@ function App() {
         return groups;
     };
 
+    const toggleAutoSkip = () => {
+        setAutoSkipEnabled(prev => {
+            const newValue = !prev;
+            localStorage.setItem('auto-skip-enabled', newValue.toString());
+            return newValue;
+        });
+    };
+
+    const handlePlaybackError = () => {
+        if (!autoSkipEnabled || !selectedChannel) return;
+        
+        const displayedChannels = getDisplayedChannels();
+        const currentIndex = displayedChannels.findIndex(ch => ch.id === selectedChannel.id);
+        
+        if (currentIndex !== -1 && currentIndex < displayedChannels.length - 1) {
+            // Skip to next channel
+            const nextChannel = displayedChannels[currentIndex + 1];
+            console.log('Auto-skipping to next channel:', nextChannel.name);
+            setSelectedChannel(nextChannel);
+        } else if (currentIndex === displayedChannels.length - 1 && displayedChannels.length > 1) {
+            // If at the end, go back to first channel
+            const firstChannel = displayedChannels[0];
+            console.log('Auto-skipping to first channel:', firstChannel.name);
+            setSelectedChannel(firstChannel);
+        }
+    };
+
     return (
         <div className="flex h-screen w-screen bg-white text-gray-900 overflow-hidden relative">
             {/* Loading Overlay - Tam ekran modal */}
@@ -301,7 +331,12 @@ function App() {
                             isPlaylistView={isPlaylistView}
                         />
 
-                        <Player channel={selectedChannel} />
+                        <Player 
+                            channel={selectedChannel} 
+                            onPlaybackError={handlePlaybackError}
+                            autoSkipEnabled={autoSkipEnabled}
+                            onToggleAutoSkip={toggleAutoSkip}
+                        />
                     </>
                 )
             )

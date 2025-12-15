@@ -50,7 +50,14 @@ function startProxyServer() {
         // Determine http or https
         const client = targetUrl.startsWith('https:') ? https : http;
         
+        // Parse target URL for request options
+        const targetParsed = new URL(targetUrl);
+        
         const options = {
+            hostname: targetParsed.hostname,
+            port: targetParsed.port || (targetUrl.startsWith('https:') ? 443 : 80),
+            path: targetParsed.pathname + targetParsed.search,
+            method: 'GET',
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': '*/*',
@@ -59,13 +66,33 @@ function startProxyServer() {
             }
         };
 
-        const proxyReq = client.get(targetUrl, options, (proxyRes) => {
-            // Forward status and headers
-            res.writeHead(proxyRes.statusCode, {
-                ...proxyRes.headers,
+        // Forward Range header for video seeking support
+        if (req.headers.range) {
+            options.headers['Range'] = req.headers.range;
+            console.log('Range request:', req.headers.range);
+        }
+
+        const proxyReq = client.request(options, (proxyRes) => {
+            // Build response headers
+            const responseHeaders = {
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Expose-Headers': '*'
-            });
+                'Access-Control-Expose-Headers': '*',
+                'Accept-Ranges': 'bytes'
+            };
+            
+            // Forward important headers
+            if (proxyRes.headers['content-type']) {
+                responseHeaders['Content-Type'] = proxyRes.headers['content-type'];
+            }
+            if (proxyRes.headers['content-length']) {
+                responseHeaders['Content-Length'] = proxyRes.headers['content-length'];
+            }
+            if (proxyRes.headers['content-range']) {
+                responseHeaders['Content-Range'] = proxyRes.headers['content-range'];
+            }
+            
+            // Forward status and headers
+            res.writeHead(proxyRes.statusCode, responseHeaders);
             
             // Pipe the response
             proxyRes.pipe(res);
@@ -73,15 +100,21 @@ function startProxyServer() {
 
         proxyReq.on('error', (error) => {
             console.error('Proxy error:', error);
-            res.writeHead(500);
-            res.end('Proxy error: ' + error.message);
+            if (!res.headersSent) {
+                res.writeHead(500);
+                res.end('Proxy error: ' + error.message);
+            }
         });
 
-        proxyReq.setTimeout(30000, () => {
+        proxyReq.setTimeout(60000, () => {
             proxyReq.destroy();
-            res.writeHead(504);
-            res.end('Gateway timeout');
+            if (!res.headersSent) {
+                res.writeHead(504);
+                res.end('Gateway timeout');
+            }
         });
+        
+        proxyReq.end();
     });
 
     proxyServer.listen(PROXY_PORT, '127.0.0.1', () => {
@@ -534,45 +567,72 @@ function cleanHLSDir() {
     }
 }
 
+// Unique session ID to prevent old stream conflicts
+let currentSessionId = 0;
+
 // Start FFmpeg transcoding
 ipcMain.handle('start-ffmpeg-transcode', async (event, streamUrl) => {
     if (!ffmpegPath) {
         return { success: false, error: 'FFmpeg not available' };
     }
     
-    // Stop existing process
+    // Increment session ID to invalidate old streams
+    currentSessionId++;
+    const sessionId = currentSessionId;
+    
+    // Stop existing process first
     if (ffmpegProcess) {
-        try { ffmpegProcess.kill('SIGKILL'); } catch {}
+        console.log('Killing existing FFmpeg process...');
+        try { 
+            ffmpegProcess.kill('SIGKILL'); 
+        } catch (e) {
+            console.log('Kill error:', e);
+        }
         ffmpegProcess = null;
+        // Wait a bit for process to fully terminate
+        await new Promise(r => setTimeout(r, 500));
     }
     
-    // Clean old files
+    // Clean old files thoroughly
     cleanHLSDir();
+    await new Promise(r => setTimeout(r, 200));
+    
+    // Check if session is still valid
+    if (sessionId !== currentSessionId) {
+        return { success: false, error: 'Session cancelled' };
+    }
     
     const outputPath = path.join(HLS_DIR, 'stream.m3u8');
     
-    // FFmpeg arguments for HLS transcoding
-    // Using append_list instead of delete_segments to avoid permission errors
+    // Live streams only - VOD files are handled by VLC in Player.jsx
+    console.log('Stream URL for FFmpeg:', streamUrl);
+    
+    // FFmpeg arguments for live streams
     const args = [
         '-y',
         '-loglevel', 'warning',
-        '-fflags', '+igndts',
+        '-fflags', '+igndts+discardcorrupt',
         '-analyzeduration', '5000000',
         '-probesize', '5000000',
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
         '-i', streamUrl,
-        '-c:v', 'copy',           // Copy video (no transcode if possible)
-        '-c:a', 'aac',            // Transcode audio to AAC (browser compatible)
+        '-c:v', 'copy',
+        '-c:a', 'aac',
         '-b:a', '128k',
         '-ac', '2',
         '-f', 'hls',
-        '-hls_time', '4',         // Longer segments for stability
-        '-hls_list_size', '5',    // Keep fewer segments in playlist
-        '-hls_flags', 'append_list+omit_endlist',  // Don't delete segments (avoid permission errors)
+        '-hls_time', '4',
+        '-hls_list_size', '5',
+        '-hls_flags', 'append_list+omit_endlist',
         '-hls_segment_filename', path.join(HLS_DIR, 'segment%03d.ts'),
         outputPath
     ];
     
-    console.log('Starting FFmpeg:', ffmpegPath, args.join(' '));
+    console.log('Starting FFmpeg:', ffmpegPath);
+    console.log('Stream URL:', streamUrl);
+    console.log('Session ID:', sessionId);
     
     return new Promise((resolve) => {
         ffmpegProcess = spawn(ffmpegPath, args, {
@@ -581,52 +641,68 @@ ipcMain.handle('start-ffmpeg-transcode', async (event, streamUrl) => {
         
         let started = false;
         let errorOutput = '';
+        let checkInterval = null;
+        let timeoutId = null;
+        
+        const cleanup = () => {
+            if (checkInterval) clearInterval(checkInterval);
+            if (timeoutId) clearTimeout(timeoutId);
+        };
         
         ffmpegProcess.stderr.on('data', (data) => {
             const msg = data.toString();
             errorOutput += msg;
             console.log('FFmpeg:', msg);
-            
-            // Check if we need to transcode video too
-            if (msg.includes('Video codec') && (msg.includes('mpeg2') || msg.includes('mpeg4'))) {
-                console.log('Detected incompatible video codec, will transcode');
-            }
         });
         
         ffmpegProcess.on('error', (err) => {
             console.error('FFmpeg error:', err);
-            if (!started) {
+            cleanup();
+            if (!started && sessionId === currentSessionId) {
                 resolve({ success: false, error: err.message });
             }
         });
         
         ffmpegProcess.on('exit', (code) => {
             console.log('FFmpeg exited with code:', code);
+            cleanup();
+            const wasOurProcess = ffmpegProcess !== null;
             ffmpegProcess = null;
-            if (!started) {
+            if (!started && wasOurProcess && sessionId === currentSessionId) {
                 resolve({ success: false, error: 'FFmpeg exited: ' + errorOutput.slice(-500) });
             }
         });
         
         // Wait for m3u8 file to be created
-        const checkInterval = setInterval(() => {
+        checkInterval = setInterval(() => {
+            // Check if session is still valid
+            if (sessionId !== currentSessionId) {
+                cleanup();
+                resolve({ success: false, error: 'Session cancelled' });
+                return;
+            }
+            
             if (fs.existsSync(outputPath)) {
-                const stat = fs.statSync(outputPath);
-                if (stat.size > 0) {
-                    clearInterval(checkInterval);
-                    started = true;
-                    resolve({
-                        success: true,
-                        hlsUrl: `http://127.0.0.1:${HLS_PORT}/stream.m3u8`,
-                    });
+                try {
+                    const stat = fs.statSync(outputPath);
+                    if (stat.size > 0) {
+                        cleanup();
+                        started = true;
+                        resolve({
+                            success: true,
+                            hlsUrl: `http://127.0.0.1:${HLS_PORT}/stream.m3u8?session=${sessionId}`,
+                        });
+                    }
+                } catch (e) {
+                    // File might be locked, try again
                 }
             }
         }, 500);
         
         // Timeout after 30 seconds
-        setTimeout(() => {
-            if (!started) {
-                clearInterval(checkInterval);
+        timeoutId = setTimeout(() => {
+            if (!started && sessionId === currentSessionId) {
+                cleanup();
                 if (ffmpegProcess) {
                     ffmpegProcess.kill('SIGKILL');
                     ffmpegProcess = null;

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Hls from 'hls.js';
-import { ExternalLink, Copy, Info, Loader, AlertCircle, Volume2, VolumeX, RotateCcw, Monitor } from 'lucide-react';
+import { ExternalLink, Copy, Info, Loader, AlertCircle, Volume2, VolumeX, RotateCcw, Monitor, SkipForward } from 'lucide-react';
 
 const isElectron = () => {
     try { return !!window.require; } catch { return false; }
@@ -12,7 +12,7 @@ const PLAYER_MODES = {
     VLC_EXTERNAL: 'vlc',    // External VLC player
 };
 
-const Player = ({ channel }) => {
+const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip }) => {
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
     const retryTimeoutRef = useRef(null);
@@ -30,6 +30,7 @@ const Player = ({ channel }) => {
     const [bufferInfo, setBufferInfo] = useState('');
     const [ffmpegStatus, setFfmpegStatus] = useState({ available: false, downloading: false, progress: 0 });
     const [isTranscoding, setIsTranscoding] = useState(false);
+    const errorTimeoutRef = useRef(null);
 
     // Check FFmpeg status on mount - auto download if not available
     useEffect(() => {
@@ -60,6 +61,10 @@ const Player = ({ channel }) => {
         if (retryTimeoutRef.current) {
             clearTimeout(retryTimeoutRef.current);
             retryTimeoutRef.current = null;
+        }
+        if (errorTimeoutRef.current) {
+            clearTimeout(errorTimeoutRef.current);
+            errorTimeoutRef.current = null;
         }
         if (hlsRef.current) {
             hlsRef.current.destroy();
@@ -94,6 +99,60 @@ const Player = ({ channel }) => {
     }, [playerMode]);
 
     const isVlcMode = playerMode === PLAYER_MODES.VLC_EXTERNAL;
+
+    // Check if URL is a direct video file (MKV, MP4, etc.)
+    const isDirectVideoFile = useCallback((url) => {
+        return /\.(mkv|mp4|avi|mov|wmv|flv|webm)(\?|$)/i.test(url);
+    }, []);
+
+    // Play direct video file via proxy (no FFmpeg needed)
+    const playDirectVideo = useCallback(async (url, video) => {
+        if (!isElectron()) return false;
+        
+        console.log('Playing direct video file:', url);
+        setBufferInfo('Loading video...');
+        
+        try {
+            const { ipcRenderer } = window.require('electron');
+            const proxyUrl = await ipcRenderer.invoke('get-proxy-url', url);
+            
+            console.log('Proxy URL:', proxyUrl);
+            
+            video.src = proxyUrl;
+            video.load();
+            
+            return new Promise((resolve) => {
+                const onCanPlay = () => {
+                    video.removeEventListener('canplay', onCanPlay);
+                    video.removeEventListener('error', onError);
+                    setIsLoading(false);
+                    setBufferInfo('');
+                    video.play().catch(() => {});
+                    resolve(true);
+                };
+                
+                const onError = () => {
+                    video.removeEventListener('canplay', onCanPlay);
+                    video.removeEventListener('error', onError);
+                    console.error('Direct video playback failed');
+                    resolve(false);
+                };
+                
+                video.addEventListener('canplay', onCanPlay);
+                video.addEventListener('error', onError);
+                
+                // Timeout after 15 seconds
+                setTimeout(() => {
+                    video.removeEventListener('canplay', onCanPlay);
+                    video.removeEventListener('error', onError);
+                    resolve(false);
+                }, 15000);
+            });
+        } catch (err) {
+            console.error('Direct video error:', err);
+            return false;
+        }
+    }, []);
 
     const playWithFFmpeg = useCallback(async (url, video) => {
         if (!isElectron() || !ffmpegStatus.available) return false;
@@ -162,25 +221,40 @@ const Player = ({ channel }) => {
             return;
         }
 
-        // VLC OFF (FFmpeg mode) - use FFmpeg transcoding
-        if (!ffmpegStatus.available) {
-            setError('FFmpeg downloading... Please wait.');
+        // MKV/MP4 video files - open in VLC (FFmpeg can't connect to this IPTV server for VOD)
+        if (isDirectVideoFile(url)) {
+            console.log('VOD file detected, opening in VLC...');
+            setIsLoading(false);
+            openInVLC(url);
             return;
         }
-        
+
         await destroyPlayers();
         video.pause();
         video.removeAttribute('src');
         video.load();
         setError(null);
         setIsLoading(true);
+
+        // For live streams - use FFmpeg transcoding
+        if (!ffmpegStatus.available) {
+            setError('FFmpeg downloading... Please wait.');
+            setIsLoading(false);
+            return;
+        }
         
         const success = await playWithFFmpeg(url, video);
         if (!success) {
             setError('Playback failed. Try VLC.');
             setIsLoading(false);
+            // Auto-skip to next channel if enabled
+            if (autoSkipEnabled && onPlaybackError) {
+                errorTimeoutRef.current = setTimeout(() => {
+                    onPlaybackError();
+                }, 3000);
+            }
         }
-    }, [destroyPlayers, playWithFFmpeg, playerMode, ffmpegStatus.available, openInVLC]);
+    }, [destroyPlayers, playWithFFmpeg, isDirectVideoFile, playerMode, ffmpegStatus.available, openInVLC, autoSkipEnabled, onPlaybackError]);
 
     // Auto-reload when video stalls + buffer monitoring
     useEffect(() => {
@@ -212,6 +286,20 @@ const Player = ({ channel }) => {
         const handlePlaying = () => {
             setBufferInfo('');
             setIsLoading(false);
+            // Clear error timeout when playing successfully
+            if (errorTimeoutRef.current) {
+                clearTimeout(errorTimeoutRef.current);
+                errorTimeoutRef.current = null;
+            }
+        };
+
+        const handleError = () => {
+            console.log('Video error occurred');
+            if (autoSkipEnabled && onPlaybackError) {
+                errorTimeoutRef.current = setTimeout(() => {
+                    onPlaybackError();
+                }, 3000);
+            }
         };
 
         // Monitor buffer level
@@ -229,6 +317,7 @@ const Player = ({ channel }) => {
         video.addEventListener('ended', handleEnded);
         video.addEventListener('waiting', handleWaiting);
         video.addEventListener('playing', handlePlaying);
+        video.addEventListener('error', handleError);
 
         return () => {
             clearInterval(bufferInterval);
@@ -236,8 +325,9 @@ const Player = ({ channel }) => {
             video.removeEventListener('ended', handleEnded);
             video.removeEventListener('waiting', handleWaiting);
             video.removeEventListener('playing', handlePlaying);
+            video.removeEventListener('error', handleError);
         };
-    }, [channel, playChannel]);
+    }, [channel, playChannel, autoSkipEnabled, onPlaybackError]);
 
     useEffect(() => {
         if (!channel) {
@@ -340,6 +430,11 @@ const Player = ({ channel }) => {
                         <div className="text-center p-6">
                             <AlertCircle className="text-red-500 mx-auto mb-3" size={48} />
                             <p className="text-white text-lg mb-4">{error}</p>
+                            {autoSkipEnabled && (
+                                <p className="text-yellow-400 text-sm mb-4 flex items-center justify-center gap-2">
+                                    <SkipForward size={16} /> Skipping to next channel in 3s...
+                                </p>
+                            )}
                             <div className="flex gap-2 justify-center">
                                 <button onClick={retryPlay} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2">
                                     <RotateCcw size={18} /> Retry
@@ -367,6 +462,18 @@ const Player = ({ channel }) => {
                             className="w-20 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-orange-500" />
                     </div>
                     <div className="flex items-center gap-2">
+                        {/* Auto-Skip Toggle */}
+                        <button 
+                            onClick={onToggleAutoSkip} 
+                            className={`px-2 py-1.5 rounded text-xs flex items-center gap-1 transition-colors ${
+                                autoSkipEnabled ? 'bg-green-600 hover:bg-green-700 text-white' : 
+                                'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                            }`}
+                            title={autoSkipEnabled ? 'Auto-skip ON - Skip to next channel on error' : 'Auto-skip OFF - Stay on failed channel'}
+                        >
+                            <SkipForward size={14} />
+                            Skip: {autoSkipEnabled ? 'ON' : 'OFF'}
+                        </button>
                         {/* VLC Toggle */}
                         <button 
                             onClick={toggleVlcMode} 
