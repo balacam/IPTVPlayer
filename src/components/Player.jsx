@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Hls from 'hls.js';
-import { ExternalLink, Copy, Info, Loader, AlertCircle, Volume2, VolumeX, RotateCcw, Monitor, SkipForward } from 'lucide-react';
+import { ExternalLink, Copy, Info, Loader, AlertCircle, Volume2, VolumeX, RotateCcw, Monitor, SkipForward, ScanEye } from 'lucide-react';
 
 const isElectron = () => {
     try { return !!window.require; } catch { return false; }
@@ -30,6 +30,8 @@ const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip })
     const [bufferInfo, setBufferInfo] = useState('');
     const [ffmpegStatus, setFfmpegStatus] = useState({ available: false, downloading: false, progress: 0 });
     const [isTranscoding, setIsTranscoding] = useState(false);
+    const [recognitionResult, setRecognitionResult] = useState(null);
+    const [isRecognizing, setIsRecognizing] = useState(false);
     const errorTimeoutRef = useRef(null);
 
     // Check FFmpeg status on mount - auto download if not available
@@ -180,6 +182,17 @@ const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip })
                     enableWorker: true,
                     lowLatencyMode: false,
                     backBufferLength: 90,
+                    // Stability settings
+                    maxBufferLength: 60,
+                    maxMaxBufferLength: 120,
+                    maxBufferHole: 2.5,
+                    manifestLoadingTimeOut: 20000,
+                    manifestLoadingMaxRetry: 10,
+                    levelLoadingTimeOut: 20000,
+                    levelLoadingMaxRetry: 10,
+                    fragLoadingTimeOut: 30000,
+                    fragLoadingMaxRetry: 10,
+                    autoStartLoad: true,
                 });
                 
                 hlsRef.current = hls;
@@ -197,6 +210,8 @@ const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip })
                         hls.destroy();
                         hlsRef.current = null;
                         setIsTranscoding(false);
+                        setError('Stream error. Try VLC.');
+                        setIsLoading(false);
                     }
                 });
                 
@@ -501,6 +516,7 @@ const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip })
                             <SkipForward size={14} />
                             Skip: {autoSkipEnabled ? 'ON' : 'OFF'}
                         </button>
+
                         {/* VLC Toggle */}
                         <button 
                             onClick={toggleVlcMode} 
@@ -532,6 +548,27 @@ const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip })
                         </div>
                         <div className="font-mono break-all">{channel.url}</div>
                         {isTranscoding && <div className="mt-1 text-purple-400">FFmpeg transcoding active</div>}
+                    </div>
+                )}
+                
+                {recognitionResult && (
+                    <div className="mt-2 p-3 bg-purple-900/50 border border-purple-500/30 rounded-lg text-sm text-gray-200 relative animate-in fade-in slide-in-from-top-2">
+                        <button 
+                            onClick={() => setRecognitionResult(null)} 
+                            className="absolute top-2 right-2 text-gray-400 hover:text-white"
+                        >
+                            ×
+                        </button>
+                        <div className="font-semibold text-purple-300 mb-1 flex items-center gap-2">
+                            <Info size={16} />
+                            Algılanan Metin (OCR Sonucu):
+                        </div>
+                        <p className="whitespace-pre-wrap font-mono text-xs bg-black/30 p-2 rounded">
+                            {recognitionResult}
+                        </p>
+                        <p className="text-[10px] text-gray-500 mt-1">
+                            Not: Sadece ekrandaki yazılar okunabilir. Logolar tanınmayabilir.
+                        </p>
                     </div>
                 )}
             </div>

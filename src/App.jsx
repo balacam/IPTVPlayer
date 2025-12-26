@@ -14,6 +14,7 @@ function App() {
     const [selectedCategory, setSelectedCategory] = useState(null); // null = show category screen
     const [isPlaylistView, setIsPlaylistView] = useState(false); // true if showing a list of playlists (flat view)
     const [currentPlaylistPath, setCurrentPlaylistPath] = useState(null); // Track the current M3U file path
+    const [urlInput, setUrlInput] = useState('');
     const [autoSkipEnabled, setAutoSkipEnabled] = useState(() => {
         return localStorage.getItem('auto-skip-enabled') === 'true';
     });
@@ -174,6 +175,37 @@ function App() {
         reader.readAsText(file);
     };
 
+    const handleUrlLoad = async () => {
+        if (!urlInput.trim()) return;
+        
+        setIsLoading(true);
+        try {
+            console.log('Loading playlist from URL:', urlInput);
+            
+            const { ipcRenderer } = window.require('electron');
+            const text = await ipcRenderer.invoke('fetch-content', urlInput);
+            
+            if (!text || text.length < 10) {
+                throw new Error('Received empty or invalid playlist content');
+            }
+
+            const parsedData = parseM3U(text);
+            if (!parsedData.channels || parsedData.channels.length === 0) {
+                throw new Error('No channels found in the playlist');
+            }
+
+            // Clear file path since we are loading from URL
+            setCurrentPlaylistPath(null);
+            
+            processPlaylistData(parsedData);
+        } catch (error) {
+            console.error('URL Load Error:', error);
+            alert(`Failed to load playlist: ${error.message}`);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     const handleDeleteChannel = async (channel) => {
         if (!currentPlaylistPath) {
             alert('Dosya yolu bulunamadı. Kanal silinemedi.');
@@ -331,6 +363,37 @@ function App() {
                             <Upload size={32} className="text-white" />
                         </div>
                         <h1 className="text-2xl font-bold text-gray-900 mb-6">Welcome to IPTV Player</h1>
+
+                        {/* URL Input Section */}
+                        <div className="mb-6">
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    placeholder="Enter Playlist URL (http://...)"
+                                    value={urlInput}
+                                    onChange={(e) => setUrlInput(e.target.value)}
+                                    spellCheck={false}
+                                    autoComplete="off"
+                                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-gray-800"
+                                    onKeyDown={(e) => e.key === 'Enter' && handleUrlLoad()}
+                                />
+                                <button
+                                    onClick={handleUrlLoad}
+                                    disabled={!urlInput.trim()}
+                                    className="bg-gray-800 hover:bg-gray-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                                >
+                                    Load
+                                </button>
+                            </div>
+                            <div className="relative my-4">
+                                <div className="absolute inset-0 flex items-center">
+                                    <div className="w-full border-t border-gray-300"></div>
+                                </div>
+                                <div className="relative flex justify-center text-sm">
+                                    <span className="px-2 bg-white text-gray-500">OR</span>
+                                </div>
+                            </div>
+                        </div>
 
                         <label className="block w-full cursor-pointer">
                             <input

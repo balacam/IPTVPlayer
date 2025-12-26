@@ -7,6 +7,11 @@ const { spawn, execSync } = require('child_process');
 const url = require('url');
 const AdmZip = require('adm-zip');
 
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
+
 // Embedded player process
 let embeddedPlayerProcess = null;
 let mainWindow = null;
@@ -15,14 +20,31 @@ let mainWindow = null;
 let ffmpegPath = null;
 let ffmpegProcess = null;
 let hlsServer = null;
-const HLS_PORT = 9877;
-const HLS_DIR = path.join(app.getPath('temp'), 'iptv-hls');
+let HLS_PORT = 0;
+const HLS_DIR = path.join(app.getPath('temp'), `iptv-hls-${process.pid}`);
 
 // Proxy server for IPTV streams
 let proxyServer = null;
-const PROXY_PORT = 9876;
+let PROXY_PORT = 0;
 
-function startProxyServer() {
+// Find available port dynamically
+function getAvailablePort(startPort) {
+    return new Promise((resolve) => {
+        const server = require('net').createServer();
+        server.listen(startPort, '127.0.0.1', () => {
+            const port = server.address().port;
+            server.close(() => resolve(port));
+        });
+        server.on('error', () => {
+            getAvailablePort(startPort + 1).then(resolve);
+        });
+    });
+}
+
+async function startProxyServer() {
+    PROXY_PORT = await getAvailablePort(9876);
+    console.log(`Using proxy port: ${PROXY_PORT}`);
+    
     proxyServer = http.createServer((req, res) => {
         // Get the target URL from query parameter
         const parsedUrl = url.parse(req.url, true);
@@ -122,11 +144,7 @@ function startProxyServer() {
     });
 
     proxyServer.on('error', (error) => {
-        if (error.code === 'EADDRINUSE') {
-            console.log(`Port ${PROXY_PORT} already in use, proxy server may already be running`);
-        } else {
-            console.error('Proxy server error:', error);
-        }
+        console.error('Proxy server error:', error);
     });
 }
 
@@ -550,7 +568,10 @@ ipcMain.handle('download-ffmpeg', async (event) => {
 });
 
 // Start HLS server for serving transcoded content
-function startHLSServer() {
+async function startHLSServer() {
+    HLS_PORT = await getAvailablePort(9877);
+    console.log(`Using HLS port: ${HLS_PORT}`);
+    
     // Create HLS directory
     if (!fs.existsSync(HLS_DIR)) {
         fs.mkdirSync(HLS_DIR, { recursive: true });
@@ -661,21 +682,27 @@ ipcMain.handle('start-ffmpeg-transcode', async (event, streamUrl) => {
     const args = [
         '-y',
         '-loglevel', 'warning',
-        '-fflags', '+igndts+discardcorrupt',
-        '-analyzeduration', '5000000',
-        '-probesize', '5000000',
+        '-fflags', '+igndts+discardcorrupt+genpts',
+        '-analyzeduration', '20000000', // Increased to 20MB
+        '-probesize', '20000000',      // Increased to 20MB
+        '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         '-reconnect', '1',
         '-reconnect_streamed', '1',
-        '-reconnect_delay_max', '5',
+        '-reconnect_on_network_error', '1',
+        '-reconnect_on_http_error', '4xx,5xx',
+        '-reconnect_delay_max', '10',
+        '-reconnect_at_eof', '1',
+        '-rw_timeout', '20000000', // 20s network timeout
         '-i', streamUrl,
+        '-max_muxing_queue_size', '9999', // Output option: Prevent buffer overflows
         '-c:v', 'copy',
         '-c:a', 'aac',
-        '-b:a', '128k',
+        '-b:a', '192k',
         '-ac', '2',
         '-f', 'hls',
-        '-hls_time', '4',
-        '-hls_list_size', '5',
-        '-hls_flags', 'append_list+omit_endlist',
+        '-hls_time', '6',         // 6s segments for stability
+        '-hls_list_size', '10',   // Keep 10 segments in list
+        '-hls_flags', 'delete_segments+omit_endlist', // Auto-delete old segments to prevent disk fill
         '-hls_segment_filename', path.join(HLS_DIR, 'segment%03d.ts'),
         outputPath
     ];
@@ -773,13 +800,119 @@ ipcMain.handle('stop-ffmpeg-transcode', async () => {
     return { success: true };
 });
 
+// IPC handler for recognizing channel from video
+ipcMain.handle('recognize-channel', async (event, streamUrl) => {
+    if (!ffmpegPath) {
+        return { success: false, error: 'FFmpeg not available' };
+    }
+
+    const tempDir = app.getPath('temp');
+    const snapshotPath = path.join(tempDir, `snapshot-${Date.now()}.jpg`);
+
+    try {
+        console.log('Taking snapshot from:', streamUrl);
+        
+        // Take snapshot using FFmpeg
+        await new Promise((resolve, reject) => {
+            const args = [
+                '-y',
+                '-i', streamUrl,
+                '-ss', '00:00:01',
+                '-vframes', '1',
+                '-q:v', '2',
+                snapshotPath
+            ];
+
+            const ffmpeg = spawn(ffmpegPath, args);
+            
+            ffmpeg.on('close', (code) => {
+                if (code === 0 && fs.existsSync(snapshotPath)) {
+                    resolve();
+                } else {
+                    reject(new Error(`FFmpeg exited with code ${code}`));
+                }
+            });
+            
+            ffmpeg.on('error', (err) => reject(err));
+            
+            // Timeout after 15 seconds
+            setTimeout(() => {
+                try { ffmpeg.kill(); } catch {}
+                reject(new Error('Snapshot timeout'));
+            }, 15000);
+        });
+
+        console.log('Snapshot taken, analyzing text...');
+
+        // Lazy load Tesseract.js using require
+        const { createWorker } = require('tesseract.js');
+        
+        // Initialize Tesseract worker
+        const worker = await createWorker('eng');
+        
+        // Recognize text
+        const ret = await worker.recognize(snapshotPath);
+        console.log('OCR Result:', ret.data.text);
+        
+        await worker.terminate();
+        
+        // Clean up snapshot
+        try { fs.unlinkSync(snapshotPath); } catch {}
+
+        return { 
+            success: true, 
+            text: ret.data.text,
+            confidence: ret.data.confidence
+        };
+
+    } catch (error) {
+        console.error('Recognition failed:', error);
+        // Clean up if exists
+        try { if (fs.existsSync(snapshotPath)) fs.unlinkSync(snapshotPath); } catch {}
+        
+        return { success: false, error: error.message };
+    }
+});
+
 function createWindow() {
-    // Remove default menu bar
-    Menu.setApplicationMenu(null);
+    // Create basic menu for Copy/Paste support
+    const template = [
+        {
+            label: 'Edit',
+            submenu: [
+                { role: 'undo' },
+                { role: 'redo' },
+                { type: 'separator' },
+                { role: 'cut' },
+                { role: 'copy' },
+                { role: 'paste' },
+                { role: 'delete' },
+                { type: 'separator' },
+                { role: 'selectAll' }
+            ]
+        },
+        {
+            label: 'View',
+            submenu: [
+                { role: 'reload' },
+                { role: 'forceReload' },
+                { role: 'toggleDevTools' },
+                { type: 'separator' },
+                { role: 'resetZoom' },
+                { role: 'zoomIn' },
+                { role: 'zoomOut' },
+                { type: 'separator' },
+                { role: 'togglefullscreen' }
+            ]
+        }
+    ];
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
     
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
+        backgroundColor: '#ffffff', // Set default background to white to prevent visual lag
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false,
@@ -819,11 +952,11 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-    // Start proxy server first
-    startProxyServer();
+    // Start proxy server first (with dynamic port)
+    await startProxyServer();
     
-    // Start HLS server for FFmpeg output
-    startHLSServer();
+    // Start HLS server for FFmpeg output (with dynamic port)
+    await startHLSServer();
     
     // Check for FFmpeg
     await findOrDownloadFFmpeg();
