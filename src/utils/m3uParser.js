@@ -40,6 +40,48 @@ const detectContentType = (url, groupTitle, channelName) => {
     return 'live';
 };
 
+export const processParsedItems = (items) => {
+    const groups = {};
+    const categories = { live: [], movie: [], series: [], playlist: [] };
+
+    const channels = items.map((item, index) => {
+        // Handle multiple URLs (comma separated)
+        // e.g. "http://url1,http://url2"
+        const rawUrl = item.url || '';
+        const sources = rawUrl.split(',').map(u => u.trim()).filter(u => u.length > 0);
+        const mainUrl = sources.length > 0 ? sources[0] : '';
+
+        // Handle different input structures (M3U parser vs Database)
+        const groupTitle = item.group?.title || item.group || item.category || 'Other';
+        const contentType = detectContentType(mainUrl, groupTitle, item.name);
+
+        if (!groups[groupTitle]) {
+            groups[groupTitle] = [];
+        }
+
+        const channelObj = {
+            id: index,
+            name: item.name || `Channel ${index + 1}`,
+            logo: item.tvg?.logo || item.logo || '',
+            url: mainUrl,
+            sources: sources, // Store all available sources
+            group: groupTitle,
+            type: contentType,
+            userAgent: item.http?.['user-agent'] || item.userAgent || '',
+            referrer: item.http?.referrer || item.referrer || '',
+        };
+
+        groups[groupTitle].push(channelObj);
+        // Ensure category exists before pushing (though we initialized known ones)
+        if (!categories[contentType]) categories[contentType] = [];
+        categories[contentType].push(channelObj);
+
+        return channelObj;
+    });
+
+    return { channels, groups, categories };
+};
+
 export const parseM3U = (content) => {
     try {
         console.log('Parsing M3U content, length:', content.length);
@@ -54,36 +96,7 @@ export const parseM3U = (content) => {
             return { channels: [], groups: {}, categories: { live: [], movie: [], series: [] } };
         }
 
-        // Transform result into a more usable format for our UI
-        const groups = {};
-        const categories = { live: [], movie: [], series: [], playlist: [] };
-
-        const channels = result.items.map((item, index) => {
-            const groupTitle = item.group?.title || 'Other';
-            const contentType = detectContentType(item.url, groupTitle, item.name);
-
-            if (!groups[groupTitle]) {
-                groups[groupTitle] = [];
-            }
-
-            const channelObj = {
-                id: index,
-                name: item.name || `Channel ${index + 1}`,
-                logo: item.tvg?.logo || '',
-                url: item.url,
-                group: groupTitle,
-                type: contentType,
-                userAgent: item.http?.['user-agent'] || '',
-                referrer: item.http?.referrer || '',
-            };
-
-            groups[groupTitle].push(channelObj);
-            // Ensure category exists before pushing (though we initialized known ones)
-            if (!categories[contentType]) categories[contentType] = [];
-            categories[contentType].push(channelObj);
-
-            return channelObj;
-        });
+        const { channels, groups, categories } = processParsedItems(result.items);
 
         console.log('Parsed', channels.length, 'channels:',
             categories.live.length, 'live,',

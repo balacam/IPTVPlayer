@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { FixedSizeList as List } from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Search, Trash2 } from 'lucide-react';
+import { useDebounce } from '../hooks/useDebounce';
 
 // Global logo cache
 const logoCache = new Map();
@@ -54,6 +55,7 @@ const ChannelLogo = ({ logo }) => {
 const ChannelList = ({ channels, selectedChannel, onSelectChannel, onDeleteChannel, isPlaylistView, canDelete }) => {
     const [expandedGroups, setExpandedGroups] = useState({});
     const [searchTerm, setSearchTerm] = useState('');
+    const debouncedSearchTerm = useDebounce(searchTerm, 300);
     const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, channel: null });
     const listRef = useRef(null);
     const contextMenuRef = useRef(null);
@@ -88,13 +90,13 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, onDeleteChann
 
     // Filter channels by search
     const filteredChannels = useMemo(() => {
-        if (!searchTerm.trim()) return channels;
-        const term = searchTerm.toLowerCase();
+        if (!debouncedSearchTerm.trim()) return channels;
+        const term = debouncedSearchTerm.toLowerCase();
         return channels.filter(ch => 
             ch.name.toLowerCase().includes(term) || 
             (ch.group && ch.group.toLowerCase().includes(term))
         );
-    }, [channels, searchTerm]);
+    }, [channels, debouncedSearchTerm]);
 
     // Group channels
     const groupedChannels = useMemo(() => {

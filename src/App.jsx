@@ -1,10 +1,13 @@
 
 import { useState } from 'react';
-import { Upload, Loader, RefreshCw, Home, ChevronLeft } from 'lucide-react';
+import { Upload, Loader, RefreshCw, Home, ChevronLeft, Database } from 'lucide-react';
 import ChannelList from './components/ChannelList';
 import Player from './components/Player';
 import CategorySelection from './components/CategorySelection';
-import { parseM3U } from './utils/m3uParser';
+import { parseM3U, processParsedItems } from './utils/m3uParser';
+import { fetchContent, openExternalPlayer, deleteChannelFromFile } from './services/api';
+import { fetchChannelsFromSupabase } from './services/supabase';
+import { isElectron } from './utils/platform';
 
 function App() {
     const [data, setData] = useState({ channels: [], groups: {}, categories: { live: [], movie: [], series: [] } });
@@ -19,12 +22,18 @@ function App() {
         return localStorage.getItem('auto-skip-enabled') === 'true';
     });
 
+    // Supabase State
+    const [supabaseConfig, setSupabaseConfig] = useState({
+        url: import.meta.env.VITE_SUPABASE_URL || localStorage.getItem('supabase-url') || '',
+        key: import.meta.env.VITE_SUPABASE_KEY || localStorage.getItem('supabase-key') || ''
+    });
+    const [showSupabaseModal, setShowSupabaseModal] = useState(false);
+
     const openInVLC = async (url) => {
         try {
-            const { ipcRenderer } = window.require('electron');
-            await ipcRenderer.invoke('open-external-player', url, 'vlc');
+            await openExternalPlayer(url);
         } catch (error) {
-            console.error('Failed to open VLC:', error);
+            console.error('Failed to open external player:', error);
         }
     };
 
@@ -37,6 +46,11 @@ function App() {
     };
 
     const processPlaylistData = (parsedData) => {
+        console.log('Processing Playlist Data:', {
+            totalChannels: parsedData.channels.length,
+            categories: Object.keys(parsedData.categories).map(k => `${k}: ${parsedData.categories[k].length}`)
+        });
+
         // Check if we have detected playlists in the parser
         // The parser now automatically categorizes nested lists as 'playlist'
         const hasPlaylists = parsedData.categories &&
@@ -102,8 +116,7 @@ function App() {
                 let text;
 
                 try {
-                    const { ipcRenderer } = window.require('electron');
-                    text = await ipcRenderer.invoke('fetch-content', channel.url);
+                    text = await fetchContent(channel.url);
                 } catch (fetchError) {
                     console.error('Fetch error:', fetchError);
                     throw new Error(`Network error: ${fetchError.message}`);
@@ -182,8 +195,7 @@ function App() {
         try {
             console.log('Loading playlist from URL:', urlInput);
             
-            const { ipcRenderer } = window.require('electron');
-            const text = await ipcRenderer.invoke('fetch-content', urlInput);
+            const text = await fetchContent(urlInput);
             
             if (!text || text.length < 10) {
                 throw new Error('Received empty or invalid playlist content');
@@ -216,8 +228,7 @@ function App() {
         if (!confirmDelete) return;
 
         try {
-            const { ipcRenderer } = window.require('electron');
-            const result = await ipcRenderer.invoke('delete-channel-from-file', currentPlaylistPath, channel.name, channel.url);
+            const result = await deleteChannelFromFile(currentPlaylistPath, channel.name, channel.url);
 
             if (result.success) {
                 // Remove from local state
@@ -312,6 +323,43 @@ function App() {
         }
     };
 
+    const handleSupabaseConnect = async () => {
+        if (!supabaseConfig.url || !supabaseConfig.key) {
+            alert('Please enter both Supabase URL and Key');
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            // Save credentials
+            localStorage.setItem('supabase-url', supabaseConfig.url);
+            localStorage.setItem('supabase-key', supabaseConfig.key);
+
+            const channels = await fetchChannelsFromSupabase(supabaseConfig.url, supabaseConfig.key);
+            
+            if (!channels || channels.length === 0) {
+                throw new Error('No channels found in the database');
+            }
+
+            console.log('Fetched', channels.length, 'channels from Supabase');
+
+            // Process data
+            const processedData = processParsedItems(channels);
+            
+            // Clear file path since we are loading from Database
+            setCurrentPlaylistPath(null);
+
+            processPlaylistData(processedData);
+            setShowSupabaseModal(false);
+            
+        } catch (error) {
+            console.error('Supabase Connect Error:', error);
+            alert('Failed to load from database: ' + error.message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     return (
         <div className="flex h-screen w-screen bg-white text-gray-900 overflow-hidden relative">
             {/* Loading Overlay - Tam ekran modal */}
@@ -350,6 +398,54 @@ function App() {
                         </div>
                         <div style={{ fontSize: '14px', color: '#6b7280' }}>
                             Please wait
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Supabase Configuration Modal */}
+            {showSupabaseModal && (
+                <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-white p-6 rounded-lg w-full max-w-md shadow-2xl border border-gray-200">
+                        <h2 className="text-xl font-bold mb-4 text-gray-900 flex items-center gap-2">
+                            <Database size={24} className="text-orange-500" />
+                            Load from Database
+                        </h2>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Supabase URL</label>
+                                <input
+                                    type="text"
+                                    value={supabaseConfig.url}
+                                    onChange={e => setSupabaseConfig(prev => ({ ...prev, url: e.target.value }))}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500 outline-none"
+                                    placeholder="https://xyz.supabase.co"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Supabase Anon Key</label>
+                                <input
+                                    type="password"
+                                    value={supabaseConfig.key}
+                                    onChange={e => setSupabaseConfig(prev => ({ ...prev, key: e.target.value }))}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500 outline-none"
+                                    placeholder="eyJh..."
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 mt-6">
+                                <button
+                                    onClick={() => setShowSupabaseModal(false)}
+                                    className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg font-medium"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleSupabaseConnect}
+                                    className="px-4 py-2 bg-orange-500 text-white hover:bg-orange-600 rounded-lg font-medium"
+                                >
+                                    Connect & Load
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -407,6 +503,21 @@ function App() {
                                 Select Playlist File
                             </div>
                         </label>
+
+                        <button
+                            onClick={() => {
+                                if (supabaseConfig.url && supabaseConfig.key) {
+                                    handleSupabaseConnect();
+                                } else {
+                                    setShowSupabaseModal(true);
+                                }
+                            }}
+                            className="flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-700 text-white py-3 px-6 rounded-lg font-semibold transition-colors mt-3 w-full"
+                        >
+                            <Database size={20} />
+                            {supabaseConfig.url && supabaseConfig.key ? 'Connect to Database' : 'Load from Database'}
+                        </button>
+
                         <p className="mt-4 text-xs text-gray-500">
                             Supports .m3u and .m3u8 playlist files
                         </p>
@@ -464,7 +575,7 @@ function App() {
                             onSelectChannel={handleChannelSelect}
                             onDeleteChannel={handleDeleteChannel}
                             isPlaylistView={isPlaylistView}
-                            canDelete={!!currentPlaylistPath}
+                            canDelete={!!currentPlaylistPath && isElectron()}
                         />
 
                         <Player 

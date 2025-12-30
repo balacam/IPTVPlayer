@@ -31,8 +31,14 @@ const CategoryCard = ({ title, icon: Icon, color, onClick, count }) => (
 );
 
 const CategorySelection = ({ categories, onSelectCategory, onLoadNewPlaylist }) => {
+    console.log('CategorySelection rendering with:', {
+        live: categories?.live?.length,
+        movie: categories?.movie?.length,
+        series: categories?.series?.length
+    });
+
     return (
-        <div className="flex min-h-screen w-full flex-col bg-[#0f172a] p-8 animate-in fade-in duration-500">
+        <div className="flex min-h-screen w-full flex-col bg-[#0f172a] p-8">
             {/* Header */}
             <div className="mb-12 text-center relative">
                 {/* Load New Playlist Button */}

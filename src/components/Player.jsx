@@ -1,382 +1,32 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import Hls from 'hls.js';
-import { ExternalLink, Copy, Info, Loader, AlertCircle, Volume2, VolumeX, RotateCcw, Monitor, SkipForward, ScanEye } from 'lucide-react';
-
-const isElectron = () => {
-    try { return !!window.require; } catch { return false; }
-};
-
-// Player modes - FFmpeg is default, VLC is optional
-const PLAYER_MODES = {
-    FFMPEG: 'ffmpeg',       // Default: FFmpeg transcoding (best compatibility)
-    VLC_EXTERNAL: 'vlc',    // External VLC player
-};
+import { useRef, useState } from 'react';
+import { ExternalLink, Copy, Info, Loader, AlertCircle, Volume2, VolumeX, RotateCcw, Monitor, SkipForward } from 'lucide-react';
+import { usePlayer } from '../hooks/usePlayer';
 
 const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip }) => {
     const videoRef = useRef(null);
-    const hlsRef = useRef(null);
-    const retryTimeoutRef = useRef(null);
+    const backupVideoRef = useRef(null);
     const [showUrl, setShowUrl] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState(null);
-    const [playerMode, setPlayerMode] = useState(() => {
-        return localStorage.getItem('player-mode') || PLAYER_MODES.FFMPEG; // FFmpeg is default
-    });
-    const [volume, setVolume] = useState(() => {
-        const saved = localStorage.getItem('player-volume');
-        return saved ? parseFloat(saved) : 1;
-    });
-    const [isMuted, setIsMuted] = useState(false);
-    const [bufferInfo, setBufferInfo] = useState('');
-    const [ffmpegStatus, setFfmpegStatus] = useState({ available: false, downloading: false, progress: 0 });
-    const [isTranscoding, setIsTranscoding] = useState(false);
-    const [recognitionResult, setRecognitionResult] = useState(null);
-    const [isRecognizing, setIsRecognizing] = useState(false);
-    const errorTimeoutRef = useRef(null);
 
-    // Check FFmpeg status on mount - auto download if not available
-    useEffect(() => {
-        if (isElectron()) {
-            const { ipcRenderer } = window.require('electron');
-            
-            // Check status and auto-download if needed
-            ipcRenderer.invoke('get-ffmpeg-status').then(status => {
-                setFfmpegStatus(status);
-                // Auto-download FFmpeg if not available
-                if (!status.available) {
-                    console.log('FFmpeg not found, starting auto-download...');
-                    ipcRenderer.invoke('download-ffmpeg');
-                }
-            });
-            
-            // Listen for download progress
-            ipcRenderer.on('ffmpeg-download-progress', (_, progress) => {
-                setFfmpegStatus(prev => ({ ...prev, downloading: true, ...progress }));
-                if (progress.status === 'complete') {
-                    setFfmpegStatus({ available: true, downloading: false });
-                }
-            });
-        }
-    }, []);
-
-    const destroyPlayers = useCallback(async () => {
-        if (retryTimeoutRef.current) {
-            clearTimeout(retryTimeoutRef.current);
-            retryTimeoutRef.current = null;
-        }
-        if (errorTimeoutRef.current) {
-            clearTimeout(errorTimeoutRef.current);
-            errorTimeoutRef.current = null;
-        }
-        if (hlsRef.current) {
-            hlsRef.current.destroy();
-            hlsRef.current = null;
-        }
-        // Stop FFmpeg transcoding
-        if (isElectron() && isTranscoding) {
-            try {
-                const { ipcRenderer } = window.require('electron');
-                await ipcRenderer.invoke('stop-ffmpeg-transcode');
-            } catch {}
-        }
-        setIsTranscoding(false);
-    }, [isTranscoding]);
-
-    const openInVLC = useCallback(async (url) => {
-        if (!url || !isElectron()) return;
-        try {
-            const { ipcRenderer } = window.require('electron');
-            await ipcRenderer.invoke('open-external-player', url, 'vlc');
-        } catch (err) {
-            console.error('VLC error:', err);
-        }
-    }, []);
-
-    const toggleVlcMode = useCallback(() => {
-        const newMode = playerMode === PLAYER_MODES.VLC_EXTERNAL 
-            ? PLAYER_MODES.FFMPEG 
-            : PLAYER_MODES.VLC_EXTERNAL;
-        setPlayerMode(newMode);
-        localStorage.setItem('player-mode', newMode);
-    }, [playerMode]);
+    const {
+        isLoading,
+        error,
+        playerMode,
+        PLAYER_MODES,
+        ffmpegStatus,
+        isTranscoding,
+        bufferInfo,
+        volume,
+        isMuted,
+        activePlayer, // 'primary' or 'backup'
+        toggleVlcMode,
+        openInVLC,
+        handleVolumeChange,
+        retryPlay,
+        setVolume,
+        setIsMuted
+    } = usePlayer({ channel, videoRef, backupVideoRef, autoSkipEnabled, onPlaybackError });
 
     const isVlcMode = playerMode === PLAYER_MODES.VLC_EXTERNAL;
-
-    // Check if URL is a direct video file (MKV, MP4, etc.)
-    const isDirectVideoFile = useCallback((url) => {
-        return /\.(mkv|mp4|avi|mov|wmv|flv|webm)(\?|$)/i.test(url);
-    }, []);
-
-    // Play direct video file via proxy (no FFmpeg needed)
-    const playDirectVideo = useCallback(async (url, video) => {
-        if (!isElectron()) return false;
-        
-        console.log('Playing direct video file:', url);
-        setBufferInfo('Loading video...');
-        
-        try {
-            const { ipcRenderer } = window.require('electron');
-            const proxyUrl = await ipcRenderer.invoke('get-proxy-url', url);
-            
-            console.log('Proxy URL:', proxyUrl);
-            
-            video.src = proxyUrl;
-            video.load();
-            
-            return new Promise((resolve) => {
-                const onCanPlay = () => {
-                    video.removeEventListener('canplay', onCanPlay);
-                    video.removeEventListener('error', onError);
-                    setIsLoading(false);
-                    setBufferInfo('');
-                    video.play().catch(() => {});
-                    resolve(true);
-                };
-                
-                const onError = () => {
-                    video.removeEventListener('canplay', onCanPlay);
-                    video.removeEventListener('error', onError);
-                    console.error('Direct video playback failed');
-                    resolve(false);
-                };
-                
-                video.addEventListener('canplay', onCanPlay);
-                video.addEventListener('error', onError);
-                
-                // Timeout after 15 seconds
-                setTimeout(() => {
-                    video.removeEventListener('canplay', onCanPlay);
-                    video.removeEventListener('error', onError);
-                    resolve(false);
-                }, 15000);
-            });
-        } catch (err) {
-            console.error('Direct video error:', err);
-            return false;
-        }
-    }, []);
-
-    const playWithFFmpeg = useCallback(async (url, video) => {
-        if (!isElectron() || !ffmpegStatus.available) return false;
-        
-        console.log('Using FFmpeg transcoding for:', url);
-        setIsTranscoding(true);
-        setBufferInfo('Transcoding...');
-        
-        try {
-            const { ipcRenderer } = window.require('electron');
-            const result = await ipcRenderer.invoke('start-ffmpeg-transcode', url);
-            
-            if (!result.success) {
-                console.error('FFmpeg failed:', result.error);
-                setIsTranscoding(false);
-                return false;
-            }
-            
-            console.log('FFmpeg HLS ready:', result.hlsUrl);
-            setBufferInfo('');
-            
-            // Play the transcoded HLS stream
-            if (Hls.isSupported()) {
-                const hls = new Hls({
-                    enableWorker: true,
-                    lowLatencyMode: false,
-                    backBufferLength: 90,
-                    // Stability settings
-                    maxBufferLength: 60,
-                    maxMaxBufferLength: 120,
-                    maxBufferHole: 2.5,
-                    manifestLoadingTimeOut: 20000,
-                    manifestLoadingMaxRetry: 10,
-                    levelLoadingTimeOut: 20000,
-                    levelLoadingMaxRetry: 10,
-                    fragLoadingTimeOut: 30000,
-                    fragLoadingMaxRetry: 10,
-                    autoStartLoad: true,
-                });
-                
-                hlsRef.current = hls;
-                hls.attachMedia(video);
-                hls.loadSource(result.hlsUrl);
-                
-                hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    setIsLoading(false);
-                    video.play().catch(() => {});
-                });
-                
-                hls.on(Hls.Events.ERROR, (_, data) => {
-                    if (data.fatal) {
-                        console.error('HLS error on transcoded stream:', data);
-                        hls.destroy();
-                        hlsRef.current = null;
-                        setIsTranscoding(false);
-                        setError('Stream error. Try VLC.');
-                        setIsLoading(false);
-                    }
-                });
-                
-                return true;
-            }
-        } catch (err) {
-            console.error('FFmpeg error:', err);
-            setIsTranscoding(false);
-        }
-        return false;
-    }, [ffmpegStatus.available]);
-
-    const playChannel = useCallback(async (url) => {
-        const video = videoRef.current;
-        if (!video || !url) return;
-
-        // VLC ON - always open in VLC
-        if (playerMode === PLAYER_MODES.VLC_EXTERNAL) {
-            console.log('VLC ON, opening in VLC');
-            setIsLoading(false);
-            openInVLC(url);
-            return;
-        }
-
-        // MKV/MP4 video files - open in VLC (FFmpeg can't connect to this IPTV server for VOD)
-        if (isDirectVideoFile(url)) {
-            console.log('VOD file detected, opening in VLC...');
-            setIsLoading(false);
-            openInVLC(url);
-            return;
-        }
-
-        await destroyPlayers();
-        video.pause();
-        video.removeAttribute('src');
-        video.load();
-        setError(null);
-        setIsLoading(true);
-
-        // For live streams - use FFmpeg transcoding
-        if (!ffmpegStatus.available) {
-            setError('FFmpeg downloading... Please wait.');
-            setIsLoading(false);
-            return;
-        }
-        
-        const success = await playWithFFmpeg(url, video);
-        if (!success) {
-            setError('Playback failed. Try VLC.');
-            setIsLoading(false);
-            // Auto-skip to next channel if enabled
-            if (autoSkipEnabled && onPlaybackError) {
-                errorTimeoutRef.current = setTimeout(() => {
-                    onPlaybackError();
-                }, 3000);
-            }
-        }
-    }, [destroyPlayers, playWithFFmpeg, isDirectVideoFile, playerMode, ffmpegStatus.available, openInVLC, autoSkipEnabled, onPlaybackError]);
-
-    // Auto-reload when video stalls + buffer monitoring
-    useEffect(() => {
-        const video = videoRef.current;
-        if (!video || !channel) return;
-
-        const handleStalled = () => {
-            console.log('Video stalled, will retry...');
-            setBufferInfo('Buffering...');
-            retryTimeoutRef.current = setTimeout(() => {
-                if (channel?.url) {
-                    console.log('Retrying after stall...');
-                    playChannel(channel.url);
-                }
-            }, 5000);
-        };
-
-        const handleEnded = () => {
-            console.log('Stream ended, reloading...');
-            if (channel?.url) {
-                setTimeout(() => playChannel(channel.url), 1000);
-            }
-        };
-
-        const handleWaiting = () => {
-            setBufferInfo('Buffering...');
-        };
-
-        const handlePlaying = () => {
-            setBufferInfo('');
-            setIsLoading(false);
-            // Clear error timeout when playing successfully
-            if (errorTimeoutRef.current) {
-                clearTimeout(errorTimeoutRef.current);
-                errorTimeoutRef.current = null;
-            }
-        };
-
-        const handleError = () => {
-            console.log('Video error occurred');
-            if (autoSkipEnabled && onPlaybackError) {
-                errorTimeoutRef.current = setTimeout(() => {
-                    onPlaybackError();
-                }, 3000);
-            }
-        };
-
-        // Monitor buffer level
-        const bufferInterval = setInterval(() => {
-            if (video.buffered.length > 0) {
-                const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-                const bufferAhead = bufferedEnd - video.currentTime;
-                if (bufferAhead > 0) {
-                    setBufferInfo(`Buffer: ${bufferAhead.toFixed(1)}s`);
-                }
-            }
-        }, 2000);
-
-        video.addEventListener('stalled', handleStalled);
-        video.addEventListener('ended', handleEnded);
-        video.addEventListener('waiting', handleWaiting);
-        video.addEventListener('playing', handlePlaying);
-        video.addEventListener('error', handleError);
-
-        return () => {
-            clearInterval(bufferInterval);
-            video.removeEventListener('stalled', handleStalled);
-            video.removeEventListener('ended', handleEnded);
-            video.removeEventListener('waiting', handleWaiting);
-            video.removeEventListener('playing', handlePlaying);
-            video.removeEventListener('error', handleError);
-        };
-    }, [channel, playChannel, autoSkipEnabled, onPlaybackError]);
-
-    useEffect(() => {
-        if (!channel) {
-            destroyPlayers();
-            if (videoRef.current) {
-                videoRef.current.pause();
-                videoRef.current.removeAttribute('src');
-            }
-            setError(null);
-            setIsLoading(false);
-            return;
-        }
-
-        if (channel.url.includes('get.php') || channel.url.includes('type=m3u')) return;
-
-        playChannel(channel.url);
-        return () => destroyPlayers();
-    }, [channel]);
-
-    useEffect(() => {
-        if (videoRef.current) {
-            videoRef.current.volume = isMuted ? 0 : volume;
-        }
-    }, [volume, isMuted]);
-
-    const handleVolumeChange = (e) => {
-        const v = parseFloat(e.target.value);
-        setVolume(v);
-        setIsMuted(v === 0);
-        localStorage.setItem('player-volume', v.toString());
-    };
-
-    const retryPlay = () => channel?.url && playChannel(channel.url);
-
 
     if (!channel) {
         return (
@@ -425,21 +75,38 @@ const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip })
     return (
         <div className="flex-1 bg-gray-900 flex flex-col">
             <div className="flex-1 relative bg-black flex items-center justify-center">
+                {/* Primary Video Player */}
                 <video
                     ref={videoRef}
                     controls
                     autoPlay
                     playsInline
                     preload="auto"
-                    className="w-full h-full object-contain"
+                    className={`w-full h-full object-contain ${activePlayer === 'backup' ? 'hidden' : 'block'}`}
                     style={{ backgroundColor: '#000' }}
+                />
+
+                {/* Backup Video Player (Background Buffer) */}
+                <video
+                    ref={backupVideoRef}
+                    controls
+                    autoPlay
+                    playsInline
+                    preload="auto"
+                    className={`w-full h-full object-contain ${activePlayer === 'backup' ? 'block' : 'hidden'}`}
+                    style={{ backgroundColor: '#000' }}
+                    muted={activePlayer !== 'backup'} // Always mute if not active
                 />
 
                 {isLoading && (
                     <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
                         <div className="text-center">
                             <Loader className="animate-spin text-orange-500 mx-auto mb-3" size={48} />
-                            <p className="text-white text-lg">{isTranscoding ? 'Transcoding...' : 'Loading...'}</p>
+                            <p className="text-white text-lg">
+                                {bufferInfo && (bufferInfo.includes('Switching') || bufferInfo.includes('Connecting')) 
+                                    ? bufferInfo 
+                                    : (isTranscoding ? 'Transcoding...' : 'Loading...')}
+                            </p>
                             <p className="text-gray-400 text-sm mt-1 mb-4">{channel.name}</p>
                             
                             <button onClick={() => openInVLC(channel?.url)} className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm mx-auto">
@@ -546,29 +213,19 @@ const Player = ({ channel, onPlaybackError, autoSkipEnabled, onToggleAutoSkip })
                             <span>URL:</span>
                             <span className="text-orange-400">{bufferInfo || 'Ready'}</span>
                         </div>
-                        <div className="font-mono break-all">{channel.url}</div>
+                        {channel.sources && channel.sources.length > 1 ? (
+                            <div className="space-y-1">
+                                {channel.sources.map((url, idx) => (
+                                    <div key={idx} className={`font-mono break-all p-1 rounded ${url === (channel.url || channel.sources[0]) ? 'bg-gray-800 text-white border-l-2 border-orange-500' : 'text-gray-500'}`}>
+                                        <span className="text-xs font-bold mr-2 text-gray-400">#{idx + 1}</span>
+                                        {url}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="font-mono break-all">{channel.url}</div>
+                        )}
                         {isTranscoding && <div className="mt-1 text-purple-400">FFmpeg transcoding active</div>}
-                    </div>
-                )}
-                
-                {recognitionResult && (
-                    <div className="mt-2 p-3 bg-purple-900/50 border border-purple-500/30 rounded-lg text-sm text-gray-200 relative animate-in fade-in slide-in-from-top-2">
-                        <button 
-                            onClick={() => setRecognitionResult(null)} 
-                            className="absolute top-2 right-2 text-gray-400 hover:text-white"
-                        >
-                            ×
-                        </button>
-                        <div className="font-semibold text-purple-300 mb-1 flex items-center gap-2">
-                            <Info size={16} />
-                            Algılanan Metin (OCR Sonucu):
-                        </div>
-                        <p className="whitespace-pre-wrap font-mono text-xs bg-black/30 p-2 rounded">
-                            {recognitionResult}
-                        </p>
-                        <p className="text-[10px] text-gray-500 mt-1">
-                            Not: Sadece ekrandaki yazılar okunabilir. Logolar tanınmayabilir.
-                        </p>
                     </div>
                 )}
             </div>
