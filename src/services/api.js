@@ -13,8 +13,7 @@ import { isElectron, isCapacitor } from '../utils/platform';
  */
 export const fetchContent = async (url) => {
     if (isElectron()) {
-        const { ipcRenderer } = window.require('electron');
-        return await ipcRenderer.invoke('fetch-content', url);
+        return await window.electronAPI.invoke('fetch-content', url);
     } else if (isCapacitor()) {
         // Use Capacitor HTTP to bypass CORS on Android
         // We assume @capacitor/http is installed
@@ -55,8 +54,7 @@ export const openExternalPlayer = async (url) => {
  */
 export const deleteChannelFromFile = async (filePath, channelName, channelUrl) => {
     if (isElectron()) {
-        const { ipcRenderer } = window.require('electron');
-        return await ipcRenderer.invoke('delete-channel-from-file', filePath, channelName, channelUrl);
+        return await window.electronAPI.invoke('delete-channel-from-file', filePath, channelName, channelUrl);
     } else {
         // File modification not fully supported in Web/Capacitor mode for external M3U files yet
         // We could implement filesystem access for Capacitor later
