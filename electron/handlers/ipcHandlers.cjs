@@ -13,6 +13,7 @@ const {
     downloadFFmpeg 
 } = require('../services/ffmpegManager.cjs');
 const { findVlcPath, findMpvPath } = require('../services/utils.cjs');
+const { parsePlaylist } = require('../services/playlistParser.cjs');
 
 let vlcWindow = null;
 let vlcProcess = null;
@@ -21,6 +22,41 @@ function setupIpcHandlers(mainWindow) {
     // Proxy URL
     ipcMain.handle('get-proxy-url', (event, streamUrl) => {
         return getProxyUrl(streamUrl);
+    });
+
+    // Fetch and Parse Playlist (Main Process)
+    ipcMain.handle('fetch-and-parse-playlist', async (event, url) => {
+        try {
+            console.log('Fetching and parsing playlist from:', url);
+            
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+            });
+
+            if (!response.ok) {
+                console.error(`HTTP Error: ${response.status} ${response.statusText}`);
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const text = await response.text();
+            console.log('Content fetched successfully. Length:', text.length);
+            
+            if (!text || text.length < 10) {
+                throw new Error('Received empty or invalid playlist content');
+            }
+
+            // Parse content in Main Process
+            const parsedData = parsePlaylist(text);
+            console.log('Playlist parsed successfully. Channels:', parsedData.channels.length);
+            
+            return { success: true, data: parsedData };
+
+        } catch (error) {
+            console.error('Fetch and parse error:', error);
+            return { success: false, error: error.message };
+        }
     });
 
     // Supabase Fetch
@@ -92,56 +128,48 @@ function setupIpcHandlers(mainWindow) {
 
     // Fetch Content
     ipcMain.handle('fetch-content', async (event, url) => {
-        return new Promise((resolve, reject) => {
+        try {
             console.log('Fetching content from:', url);
             
-            const client = url.startsWith('https:') ? https : http;
-            const options = {
+            const response = await fetch(url, {
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Accept': '*/*',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Cache-Control': 'no-cache'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                 }
-            };
-
-            const req = client.get(url, options, (res) => {
-                let data = '';
-                
-                if (res.statusCode !== 200) {
-                    reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`));
-                    return;
-                }
-
-                res.on('data', (chunk) => {
-                    data += chunk;
-                });
-
-                res.on('end', () => {
-                    resolve(data);
-                });
             });
 
-            req.on('error', (error) => {
-                reject(error);
-            });
+            if (!response.ok) {
+                console.error(`HTTP Error: ${response.status} ${response.statusText}`);
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
 
-            req.setTimeout(15000, () => {
-                req.destroy();
-                reject(new Error('Request timeout after 15 seconds'));
-            });
-        });
+            const text = await response.text();
+            console.log('Content fetched successfully. Length:', text.length);
+            console.log('Content preview (first 500 chars):', text.substring(0, 500));
+            
+            return text;
+        } catch (error) {
+            console.error('Fetch content error:', error);
+            throw error;
+        }
     });
 
     // Open External Player
-    ipcMain.handle('open-external-player', async (event, url, playerType = 'vlc') => {
+    ipcMain.handle('open-external-player', async (event, url, playerType = 'vlc', options = {}) => {
         try {
             console.log(`Opening ${playerType} with URL:`, url);
             
             if (playerType === 'vlc') {
                 const vlcPath = findVlcPath();
                 if (vlcPath) {
-                    spawn(vlcPath, [url], { detached: true, stdio: 'ignore' });
+                    const args = [url];
+                    
+                    // Add User-Agent if provided
+                    if (options && options.userAgent) {
+                        console.log('Setting VLC User-Agent:', options.userAgent);
+                        args.push(`:http-user-agent=${options.userAgent}`);
+                    }
+
+                    spawn(vlcPath, args, { detached: true, stdio: 'ignore' });
                     return { success: true, message: 'VLC opened successfully' };
                 }
                 
@@ -277,8 +305,8 @@ function setupIpcHandlers(mainWindow) {
         }
     });
 
-    ipcMain.handle('start-ffmpeg-transcode', async (event, streamUrl, streamId = 'primary') => {
-        return await startFFmpegTranscode(streamUrl, streamId);
+    ipcMain.handle('start-ffmpeg-transcode', async (event, streamUrl, streamId = 'primary', userAgent = null) => {
+        return await startFFmpegTranscode(streamUrl, streamId, userAgent);
     });
 
     ipcMain.handle('stop-ffmpeg-transcode', async (event, streamId = null) => {

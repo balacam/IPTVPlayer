@@ -1,6 +1,6 @@
 {
     "name": "iptvplayer",
-    "version": "1.0.0",
+    "version": "2.2.0",
     "description": "Cross-platform IPTV Player app",
     "type": "module",
     "main": "electron/main.cjs",
@@ -36,12 +36,18 @@
     },
     "scripts": {
         "dev": "vite",
+        "bump-version": "node scripts/update-version.js",
         "build": "vite build",
+        "build:tv": "vite build --mode tv",
         "preview": "vite preview",
         "start": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .\"",
         "electron:start": "electron .",
         "electron:dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 npm run electron:start\"",
-        "electron:build": "vite build && electron-builder"
+        "electron:build": "vite build && electron-builder",
+        "android:sync": "npx cap sync android",
+        "android:build:tv": "npm run build:tv && npx cap sync android",
+        "android:apk:tv": "npm run build:tv && npx cap sync android && cd android && gradlew assembleTvDebug",
+        "android:apk:phone": "npm run build && npx cap sync android && cd android && gradlew assemblePhoneDebug"
     },
     "keywords": [
         "iptv",
@@ -53,9 +59,12 @@
     "author": "",
     "license": "ISC",
     "dependencies": {
+        "@capacitor-community/file-opener": "^8.0.0",
+        "@capacitor/android": "^8.0.0",
         "@capacitor/app": "^8.0.0",
+        "@capacitor/app-launcher": "^8.0.0",
         "@capacitor/core": "^8.0.0",
-        "@capacitor/http": "^0.0.2",
+        "@capacitor/filesystem": "^8.0.0",
         "@supabase/supabase-js": "^2.89.0",
         "adm-zip": "^0.5.16",
         "dotenv": "^17.2.3",
@@ -71,6 +80,7 @@
         "video.js": "^8.23.4"
     },
     "devDependencies": {
+        "@capacitor/cli": "^8.0.0",
         "@tailwindcss/postcss": "^4.1.18",
         "@tailwindcss/vite": "^4.1.18",
         "@vitejs/plugin-react": "^4.2.0",

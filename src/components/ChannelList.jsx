@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { FixedSizeList as List } from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
-import { ChevronDown, ChevronRight, Folder, FolderOpen, Search, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder, FolderOpen, Search } from 'lucide-react';
 import { useDebounce } from '../hooks/useDebounce';
 
 // Global logo cache
@@ -52,51 +52,32 @@ const ChannelLogo = ({ logo }) => {
     );
 };
 
-const ChannelList = ({ channels, selectedChannel, onSelectChannel, onDeleteChannel, isPlaylistView, canDelete }) => {
+const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistView }) => {
     const [expandedGroups, setExpandedGroups] = useState({});
     const [searchTerm, setSearchTerm] = useState('');
     const debouncedSearchTerm = useDebounce(searchTerm, 300);
-    const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, channel: null });
+    const [focusedIndex, setFocusedIndex] = useState(0);
     const listRef = useRef(null);
-    const contextMenuRef = useRef(null);
-
-    // Close context menu when clicking outside
-    useEffect(() => {
-        const handleClickOutside = (e) => {
-            if (contextMenuRef.current && !contextMenuRef.current.contains(e.target)) {
-                setContextMenu({ visible: false, x: 0, y: 0, channel: null });
-            }
-        };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    const handleContextMenu = useCallback((e, channel) => {
-        e.preventDefault();
-        setContextMenu({
-            visible: true,
-            x: e.clientX,
-            y: e.clientY,
-            channel
-        });
-    }, []);
-
-    const handleDeleteClick = useCallback(() => {
-        if (contextMenu.channel && onDeleteChannel) {
-            onDeleteChannel(contextMenu.channel);
-        }
-        setContextMenu({ visible: false, x: 0, y: 0, channel: null });
-    }, [contextMenu.channel, onDeleteChannel]);
+    const listContainerRef = useRef(null);
 
     // Filter channels by search
     const filteredChannels = useMemo(() => {
         if (!debouncedSearchTerm.trim()) return channels;
         const term = debouncedSearchTerm.toLowerCase();
-        return channels.filter(ch => 
-            ch.name.toLowerCase().includes(term) || 
+        return channels.filter(ch =>
+            ch.name.toLowerCase().includes(term) ||
             (ch.group && ch.group.toLowerCase().includes(term))
         );
     }, [channels, debouncedSearchTerm]);
+
+    // Arama yapılınca tüm grupları aç
+    useEffect(() => {
+        if (debouncedSearchTerm.trim()) {
+            const allGroups = {};
+            Object.keys(groupedChannels).forEach(g => allGroups[g] = true);
+            setExpandedGroups(allGroups);
+        }
+    }, [debouncedSearchTerm, groupedChannels]);
 
     // Group channels
     const groupedChannels = useMemo(() => {
@@ -108,7 +89,7 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, onDeleteChann
         }, {});
     }, [filteredChannels, isPlaylistView]);
 
-    // Build flat list with group headers for virtualization
+    // Build flat list with group headers
     const flatList = useMemo(() => {
         const items = [];
         Object.entries(groupedChannels).forEach(([groupName, groupChannels]) => {
@@ -128,6 +109,92 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, onDeleteChann
         setExpandedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }));
     }, []);
 
+    // Find current group name for focused item
+    const findCurrentGroupName = useCallback(() => {
+        const item = flatList[focusedIndex];
+        if (!item) return null;
+        if (item.type === 'header') return item.groupName;
+        if (item.type === 'channel') return item.channel.group || 'Other';
+        return null;
+    }, [flatList, focusedIndex]);
+
+    // Collapse current group
+    const collapseCurrentGroup = useCallback(() => {
+        const groupName = findCurrentGroupName();
+        if (!groupName || isPlaylistView) return;
+
+        if (expandedGroups[groupName]) {
+            setExpandedGroups(prev => ({ ...prev, [groupName]: false }));
+            const headerIndex = flatList.findIndex(
+                item => item.type === 'header' && item.groupName === groupName
+            );
+            if (headerIndex !== -1) {
+                setFocusedIndex(headerIndex);
+            }
+        }
+    }, [findCurrentGroupName, expandedGroups, flatList, isPlaylistView]);
+
+    const searchInputRef = useRef(null);
+
+    // TV Remote keyboard navigation
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            // Arama kutusundayken
+            if (document.activeElement === searchInputRef.current) {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    listContainerRef.current?.focus();
+                    setFocusedIndex(0);
+                }
+                return;
+            }
+
+            if (!listContainerRef.current?.contains(document.activeElement)) return;
+
+            const itemCount = flatList.length;
+            if (itemCount === 0) return;
+
+            switch (e.key) {
+                case 'ArrowDown':
+                    e.preventDefault();
+                    setFocusedIndex(prev => Math.min(prev + 1, itemCount - 1));
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    if (focusedIndex === 0) {
+                        // En üstteyken yukarı basınca arama kutusuna git
+                        searchInputRef.current?.focus();
+                    } else {
+                        setFocusedIndex(prev => prev - 1);
+                    }
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    collapseCurrentGroup();
+                    break;
+                case 'Enter':
+                    e.preventDefault();
+                    const item = flatList[focusedIndex];
+                    if (item?.type === 'header') {
+                        toggleGroup(item.groupName);
+                    } else if (item?.type === 'channel') {
+                        onSelectChannel(item.channel);
+                    }
+                    break;
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [focusedIndex, flatList, onSelectChannel, toggleGroup, collapseCurrentGroup]);
+
+    // Scroll to focused item
+    useEffect(() => {
+        if (listRef.current) {
+            listRef.current.scrollToItem(focusedIndex, 'smart');
+        }
+    }, [focusedIndex]);
+
     // Preload logos
     useEffect(() => {
         if (channels?.length > 0) {
@@ -138,12 +205,16 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, onDeleteChann
     // Row renderer
     const Row = useCallback(({ index, style }) => {
         const item = flatList[index];
-        
+        const isFocused = focusedIndex === index;
+
         if (item.type === 'header') {
             const isExpanded = expandedGroups[item.groupName];
             return (
                 <div style={style}
-                    className="bg-[#1e293b] border-b border-gray-700/50 px-4 flex items-center cursor-pointer hover:bg-[#253248] transition-colors"
+                    className={`bg-[#1e293b] border-b border-gray-700/50 px-4 flex items-center cursor-pointer hover:bg-[#253248] transition-colors ${
+                        isFocused ? 'ring-2 ring-orange-500 bg-[#253248]' : ''
+                    }`}
+                    tabIndex={0}
                     onClick={() => toggleGroup(item.groupName)}>
                     <div className="flex items-center gap-2 flex-1">
                         {isExpanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
@@ -157,73 +228,53 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, onDeleteChann
 
         const channel = item.channel;
         const isSelected = selectedChannel?.id === channel.id;
-        const isPlaylist = channel.url.includes('get.php') || channel.url.includes('type=m3u');
 
         return (
             <div style={style}
                 className={`flex items-center px-4 gap-3 cursor-pointer transition-colors ${
-                    isSelected ? 'bg-blue-600/20 border-l-4 border-l-blue-500' : 'hover:bg-gray-800/50 border-l-4 border-l-transparent'
+                    isSelected ? 'bg-blue-600/20 border-l-4 border-l-blue-500' :
+                    isFocused ? 'bg-orange-600/30 border-l-4 border-l-orange-500' :
+                    'hover:bg-gray-800/50 border-l-4 border-l-transparent'
                 }`}
-                onClick={() => onSelectChannel(channel, false)}
-                onDoubleClick={() => onSelectChannel(channel, true)}
-                onContextMenu={(e) => handleContextMenu(e, channel)}>
+                tabIndex={0}
+                onClick={() => onSelectChannel(channel)}>
                 <ChannelLogo logo={channel.logo} />
                 <div className="flex-1 min-w-0">
-                    <div className={`font-medium text-sm truncate ${isSelected ? 'text-blue-100' : 'text-gray-200'}`}>
+                    <div className={`font-medium text-sm truncate ${isSelected ? 'text-blue-100' : isFocused ? 'text-orange-100' : 'text-gray-200'}`}>
                         {channel.name}
                     </div>
                     <div className="text-xs text-gray-500 truncate">{channel.group || '-'}</div>
                 </div>
-                <span className={`text-xs px-2 py-1 rounded-full ${isPlaylist ? 'bg-purple-900/50 text-purple-300' : 'bg-gray-800 text-gray-400'}`}>
-                    {isPlaylist ? 'Link' : 'Stream'}
-                </span>
             </div>
         );
-    }, [flatList, expandedGroups, selectedChannel, onSelectChannel, toggleGroup, handleContextMenu]);
-
+    }, [flatList, expandedGroups, selectedChannel, onSelectChannel, toggleGroup, focusedIndex]);
 
     return (
-        <div className="w-[450px] bg-[#0f172a] border-r border-gray-800 h-full flex flex-col relative">
-            {/* Context Menu */}
-            {contextMenu.visible && canDelete && (
-                <div
-                    ref={contextMenuRef}
-                    className="fixed bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 z-50 min-w-[160px]"
-                    style={{ left: contextMenu.x, top: contextMenu.y }}
-                >
-                    <button
-                        onClick={handleDeleteClick}
-                        className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-900/30 flex items-center gap-2 transition-colors"
-                    >
-                        <Trash2 size={14} />
-                        Kanalı Sil
-                    </button>
-                </div>
-            )}
-
+        <div className="w-[450px] bg-[#0f172a] border-r border-gray-800 h-full flex flex-col">
             {/* Search */}
             <div className="p-3 border-b border-gray-800">
                 <div className="relative">
                     <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
                     <input
+                        ref={searchInputRef}
                         type="text"
-                        placeholder="Search channels..."
+                        placeholder="Kanal ara..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-orange-500"
                     />
                 </div>
                 <div className="mt-2 text-xs text-gray-500">
-                    {filteredChannels.length} channels {searchTerm && `(for "${searchTerm}")`}
+                    {filteredChannels.length} kanal {searchTerm && `("${searchTerm}" için)`}
                 </div>
             </div>
 
             {/* Virtualized List */}
-            <div className="flex-1">
+            <div className="flex-1" ref={listContainerRef} tabIndex={0}>
                 {flatList.length === 0 ? (
                     <div className="p-12 text-gray-500 text-sm text-center flex flex-col items-center justify-center h-full">
                         <span className="text-4xl mb-4">📺</span>
-                        <p>No channels found.</p>
+                        <p>Kanal bulunamadı.</p>
                     </div>
                 ) : (
                     <AutoSizer>

@@ -1,25 +1,47 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace = "com.iptvplayer.app"
-    compileSdk = rootProject.ext.compileSdkVersion
+    namespace 'com.iptvplayer.app'
+    compileSdk rootProject.ext.compileSdkVersion
+    
     defaultConfig {
         applicationId "com.iptvplayer.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 7
+        versionName "2.4.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
-             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    flavorDimensions = ["platform"]
+    productFlavors {
+        phone {
+            dimension "platform"
+        }
+        tv {
+            dimension "platform"
+        }
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            def flavorName = variant.productFlavors[0].name
+            if (flavorName == "tv") {
+                outputFileName = "IPTVPlayer-TV-${variant.versionName}.apk"
+            } else {
+                outputFileName = "IPTVPlayer-${variant.versionName}.apk"
+            }
         }
     }
 }
@@ -36,6 +58,13 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    
+    // FFmpeg for stream transcoding - Community fork (original retired)
+    implementation 'com.moizhassan.ffmpeg:ffmpeg-kit-16kb:6.1.1'
+    
+    // NanoHTTPD for local HLS server
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+    
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

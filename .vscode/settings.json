@@ -2,5 +2,6 @@
     "css.validate": false,
     "less.validate": false,
     "scss.validate": false,
-    "css.lint.unknownAtRules": "ignore"
+    "css.lint.unknownAtRules": "ignore",
+    "java.configuration.updateBuildConfiguration": "automatic"
 }

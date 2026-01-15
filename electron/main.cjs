@@ -36,7 +36,17 @@ function createWindow() {
 
     // Disable CORS completely (Extra safety, though proxy handles it too)
     mainWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
-        details.requestHeaders['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+        // Check for custom User-Agent header from frontend
+        const customUA = details.requestHeaders['X-IPTV-User-Agent'] || details.requestHeaders['x-iptv-user-agent'];
+        
+        if (customUA) {
+            details.requestHeaders['User-Agent'] = customUA;
+            delete details.requestHeaders['X-IPTV-User-Agent'];
+            delete details.requestHeaders['x-iptv-user-agent'];
+        } else {
+            details.requestHeaders['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+        }
+        
         callback({ requestHeaders: details.requestHeaders });
     });
 

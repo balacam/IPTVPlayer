@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     invoke: (channel, ...args) => {
         const validChannels = [
             'fetch-content',
+            'fetch-and-parse-playlist',
             'open-external-player',
             'delete-channel-from-file',
             'get-player-info',

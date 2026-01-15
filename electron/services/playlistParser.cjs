@@ -1,10 +1,10 @@
-import { parse } from 'iptv-playlist-parser';
+const { parse } = require('iptv-playlist-parser');
 
 // Detect content type from URL
 const detectContentType = (url, groupTitle, channelName) => {
-    const lowerUrl = url.toLowerCase();
-    const lowerGroup = (groupTitle || '').toLowerCase();
-    const lowerName = (channelName || '').toLowerCase();
+    const lowerUrl = (url || '').toLowerCase();
+    const lowerGroup = String(groupTitle || '').toLowerCase();
+    const lowerName = String(channelName || '').toLowerCase();
 
     // Playlists (Nested M3U)
     if (lowerUrl.includes('type=m3u') ||
@@ -14,7 +14,7 @@ const detectContentType = (url, groupTitle, channelName) => {
         return 'playlist';
     }
 
-    // Movies - check URL pattern AND group/name keywords
+    // Movies
     if (lowerUrl.includes('/movie/') ||
         lowerGroup.includes('movie') ||
         lowerGroup.includes('film') ||
@@ -24,7 +24,7 @@ const detectContentType = (url, groupTitle, channelName) => {
         return 'movie';
     }
 
-    // Series - check URL pattern AND group/name keywords
+    // Series
     if (lowerUrl.includes('/series/') ||
         lowerGroup.includes('series') ||
         lowerGroup.includes('dizi') ||
@@ -35,23 +35,19 @@ const detectContentType = (url, groupTitle, channelName) => {
         return 'series';
     }
 
-    // Live TV - everything else (most IPTV streams are live)
-    // Standard IPTV URLs like http://server:port/user/pass/channelid are live
+    // Live TV
     return 'live';
 };
 
-export const processParsedItems = (items) => {
+const processParsedItems = (items) => {
     const groups = {};
     const categories = { live: [], movie: [], series: [], playlist: [] };
 
     const channels = items.map((item, index) => {
-        // Handle multiple URLs (comma separated)
-        // e.g. "http://url1,http://url2"
         const rawUrl = item.url || '';
         const sources = rawUrl.split(',').map(u => u.trim()).filter(u => u.length > 0);
         const mainUrl = sources.length > 0 ? sources[0] : '';
 
-        // Handle different input structures (M3U parser vs Database)
         const groupTitle = item.group?.title || item.group || item.category || 'Other';
         const contentType = detectContentType(mainUrl, groupTitle, item.name);
 
@@ -64,7 +60,7 @@ export const processParsedItems = (items) => {
             name: item.name || `Channel ${index + 1}`,
             logo: item.tvg?.logo || item.logo || '',
             url: mainUrl,
-            sources: sources, // Store all available sources
+            sources: sources,
             group: groupTitle,
             type: contentType,
             userAgent: item.http?.['user-agent'] || item.userAgent || '',
@@ -72,7 +68,6 @@ export const processParsedItems = (items) => {
         };
 
         groups[groupTitle].push(channelObj);
-        // Ensure category exists before pushing (though we initialized known ones)
         if (!categories[contentType]) categories[contentType] = [];
         categories[contentType].push(channelObj);
 
@@ -82,28 +77,29 @@ export const processParsedItems = (items) => {
     return { channels, groups, categories };
 };
 
-export const parseM3U = (content) => {
+const parsePlaylist = (content) => {
     try {
-        console.log('Parsing M3U content, length:', content.length);
+        console.log('Parsing M3U content in Main Process, length:', content.length);
 
-        // Clean up content - remove BOM and normalize line endings
+        // Clean up content
         const cleanContent = content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
         let items = [];
 
+        // 1. Try Library Parser
         try {
             const result = parse(cleanContent);
             if (result && result.items && result.items.length > 0) {
                 items = result.items;
-                console.log('Library parser found', items.length, 'items');
+                console.log('Main Process: Library parser found', items.length, 'items');
             }
         } catch (libError) {
-            console.warn('Library parser failed:', libError);
+            console.warn('Main Process: Library parser failed:', libError.message);
         }
 
-        // Fallback: Manual regex parsing if library failed or returned 0 items
+        // 2. Fallback: Manual Regex Parser
         if (items.length === 0) {
-            console.warn('Library parser found 0 items. Trying manual regex parsing...');
+            console.warn('Main Process: Trying manual regex parsing...');
             const lines = cleanContent.split('\n');
             let currentItem = {};
             
@@ -112,9 +108,7 @@ export const parseM3U = (content) => {
                 if (!line) continue;
 
                 if (line.startsWith('#EXTINF:')) {
-                    // Reset current item
                     currentItem = {};
-                    
                     // Extract info
                     const infoMatch = line.match(/#EXTINF:(-?\d+)(.*),(.*)$/);
                     if (infoMatch) {
@@ -132,32 +126,25 @@ export const parseM3U = (content) => {
                         if (tvgIdMatch) currentItem.tvg = { id: tvgIdMatch[1], ...currentItem.tvg };
                     }
                 } else if (!line.startsWith('#')) {
-                    // Assuming it's a URL
                     if (currentItem.name) {
                         currentItem.url = line;
                         items.push(currentItem);
-                        currentItem = {}; // Reset after adding
+                        currentItem = {}; 
                     }
                 }
             }
-            console.log('Manual parser found', items.length, 'items');
+            console.log('Main Process: Manual parser found', items.length, 'items');
         }
 
         if (items.length === 0) {
-            console.warn('No items found in parsed result (both methods failed)');
-            return { channels: [], groups: {}, categories: { live: [], movie: [], series: [] } };
+            throw new Error('No items found in parsed result');
         }
 
-        const { channels, groups, categories } = processParsedItems(items);
-
-        console.log('Parsed', channels.length, 'channels:',
-            categories.live.length, 'live,',
-            categories.movie.length, 'movies,',
-            categories.series.length, 'series');
-
-        return { channels, groups, categories };
+        return processParsedItems(items);
     } catch (error) {
-        console.error("Error parsing M3U:", error);
-        return { channels: [], groups: {}, categories: { live: [], movie: [], series: [] } };
+        console.error("Main Process: Error parsing M3U:", error);
+        throw error;
     }
 };
+
+module.exports = { parsePlaylist };

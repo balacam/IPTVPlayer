@@ -1,6 +1,4 @@
-
 import { createClient } from '@supabase/supabase-js';
-import { isElectron } from '../utils/platform';
 
 let supabase = null;
 
@@ -12,30 +10,29 @@ export const initSupabase = (url, key) => {
 
 export const getSupabaseClient = () => supabase;
 
+/**
+ * Fetch channels using direct REST API
+ */
 export const fetchChannelsFromSupabase = async (url, key) => {
     try {
-        // If Electron, use IPC to avoid browser restrictions on secret keys
-        if (isElectron()) {
-            console.log('Fetching from Supabase via Electron IPC...');
-            const result = await window.electronAPI.invoke('supabase-fetch-channels', url, key);
-            if (result.success) {
-                return result.data || [];
-            } else {
-                throw new Error(result.error);
+        console.log('Fetching from Supabase via REST API...');
+        
+        const response = await fetch(`${url}/rest/v1/channels?select=*&order=id.asc`, {
+            headers: {
+                'apikey': key,
+                'Authorization': `Bearer ${key}`,
+                'Content-Type': 'application/json'
             }
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Database error: ${response.status} - ${errorText}`);
         }
 
-        // Web Fallback (will fail if using service key)
-        const client = initSupabase(url, key);
-        
-        const { data, error } = await client
-            .from('channels')
-            .select('*')
-            .order('id', { ascending: true });
-
-        if (error) throw error;
-        
+        const data = await response.json();
         return data || [];
+        
     } catch (error) {
         console.error('Supabase fetch error:', error);
         throw error;

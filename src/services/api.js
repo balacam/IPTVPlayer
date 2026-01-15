@@ -1,78 +1,55 @@
+import { registerPlugin, CapacitorHttp } from '@capacitor/core';
 
-import { isElectron, isCapacitor } from '../utils/platform';
-
-// For Capacitor, we'll need to import these dynamically or assume they are available globally if we were using a bundler that supports it nicely.
-// Since we are in Vite, we can import them, but we need to make sure we install them.
-// import { Http } from '@capacitor/http';
-// import { App as CapacitorApp } from '@capacitor/app';
+const VlcLauncher = registerPlugin('VlcLauncher');
 
 /**
- * Fetch content from a URL handling CORS if necessary
- * @param {string} url 
- * @returns {Promise<string>}
+ * Fetch content from a URL
  */
 export const fetchContent = async (url) => {
-    if (isElectron()) {
-        return await window.electronAPI.invoke('fetch-content', url);
-    } else if (isCapacitor()) {
-        // Use Capacitor HTTP to bypass CORS on Android
-        // We assume @capacitor/http is installed
-        const { Http } = await import('@capacitor/http');
-        const response = await Http.get({ url });
+    try {
+        const response = await CapacitorHttp.get({ url });
         return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
-    } else {
-        // Web fallback (CORS might be an issue)
+    } catch (e) {
+        console.warn('Capacitor HTTP failed, falling back to fetch:', e);
         const response = await fetch(url);
         return await response.text();
     }
 };
 
 /**
- * Open a URL in an external player (VLC)
- * @param {string} url 
- * @returns {Promise<void>}
+ * Fetch and Parse Playlist
  */
-export const openExternalPlayer = async (url) => {
-    if (isElectron()) {
-        await window.electronAPI.invoke('open-external-player', url, 'vlc');
-    } else if (isCapacitor()) {
-        // On Android, we can try to open the URL with an Intent
-        // This usually prompts the user to choose an app (VLC, MX Player, etc.)
-        const { App: CapacitorApp } = await import('@capacitor/app');
-        await CapacitorApp.openUrl({ url });
-    } else {
-        window.open(url, '_blank');
+export const fetchAndParsePlaylist = async (url) => {
+    try {
+        const text = await fetchContent(url);
+        return { success: true, rawText: text };
+    } catch (error) {
+        return { success: false, error: error.message };
     }
 };
 
 /**
- * Delete a channel from the local M3U file
- * @param {string} filePath 
- * @param {string} channelName 
- * @param {string} channelUrl 
- * @returns {Promise<{success: boolean, error?: string}>}
+ * Open a URL in external player (Just Video Player)
  */
-export const deleteChannelFromFile = async (filePath, channelName, channelUrl) => {
-    if (isElectron()) {
-        return await window.electronAPI.invoke('delete-channel-from-file', filePath, channelName, channelUrl);
-    } else {
-        // File modification not fully supported in Web/Capacitor mode for external M3U files yet
-        // We could implement filesystem access for Capacitor later
-        return { success: false, error: 'File editing is only supported in Desktop mode' };
-    }
-};
-
-/**
- * Get info about available players
- */
-export const getPlayerInfo = async () => {
-    if (isElectron()) {
-        return await window.electronAPI.invoke('get-player-info');
-    } else {
-        return {
-            vlcAvailable: false,
-            mpvAvailable: false,
-            ffmpegAvailable: false
-        };
+export const openExternalPlayer = async (url, options = {}) => {
+    try {
+        await VlcLauncher.launchVideo({
+            url: url,
+            userAgent: options.userAgent || ''
+        });
+    } catch (err) {
+        if (err.message === 'PLAYER_NOT_INSTALLED' || err.code === 'PLAYER_NOT_INSTALLED') {
+            try {
+                const { AppLauncher } = await import('@capacitor/app-launcher');
+                await AppLauncher.openUrl({
+                    url: 'market://details?id=com.brouken.player'
+                });
+            } catch (e) {
+                console.error('Market open failed:', e);
+                window.open('https://play.google.com/store/apps/details?id=com.brouken.player', '_blank');
+            }
+        } else {
+            console.error('Player launch error:', err);
+        }
     }
 };

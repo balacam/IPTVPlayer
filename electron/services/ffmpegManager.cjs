@@ -232,7 +232,7 @@ async function downloadFFmpeg(progressCallback) {
 }
 
 // Start Transcoding
-async function startFFmpegTranscode(streamUrl, streamId = 'primary') {
+async function startFFmpegTranscode(streamUrl, streamId = 'primary', userAgent = null) {
     if (!ffmpegPath) {
         return { success: false, error: 'FFmpeg not available' };
     }
@@ -260,6 +260,8 @@ async function startFFmpegTranscode(streamUrl, streamId = 'primary') {
     
     const outputPath = path.join(sessionDir, 'stream.m3u8');
     
+    const finalUserAgent = userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
     const args = [
         '-y',
         '-loglevel', 'error',
@@ -268,7 +270,7 @@ async function startFFmpegTranscode(streamUrl, streamId = 'primary') {
         '-analyzeduration', '5000000', 
         '-probesize', '5000000', 
         '-err_detect', 'ignore_err',
-        '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '-user_agent', finalUserAgent,
         '-reconnect', '1',
         '-reconnect_streamed', '1',
         '-reconnect_on_network_error', '1',
