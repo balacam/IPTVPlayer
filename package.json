@@ -61,10 +61,10 @@
     "license": "ISC",
     "dependencies": {
         "@capacitor-community/file-opener": "^8.0.0",
-        "@capacitor/android": "^8.0.0",
+        "@capacitor/android": "^8.0.1",
         "@capacitor/app": "^8.0.0",
         "@capacitor/app-launcher": "^8.0.0",
-        "@capacitor/core": "^8.0.0",
+        "@capacitor/core": "^8.0.1",
         "@capacitor/filesystem": "^8.0.0",
         "@supabase/supabase-js": "^2.89.0",
         "adm-zip": "^0.5.16",
@@ -80,7 +80,7 @@
         "video.js": "^8.23.4"
     },
     "devDependencies": {
-        "@capacitor/cli": "^8.0.0",
+        "@capacitor/cli": "^8.0.1",
         "@tailwindcss/postcss": "^4.1.18",
         "@tailwindcss/vite": "^4.1.18",
         "@vitejs/plugin-react": "^4.2.0",

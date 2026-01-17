@@ -12,6 +12,7 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.media3.common.C;
+import androidx.media3.common.util.Util;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
@@ -87,13 +88,13 @@ public class PlayerActivity extends AppCompatActivity {
     @androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
     private void initializePlayer() {
         try {
-            // Agresif buffering - büyük buffer, sürekli yükle
+            // Optimized buffering to prevent OOM
             LoadControl loadControl = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
-                    60000,      // Min buffer: 60 saniye (büyük tut)
-                    120000,     // Max buffer: 2 dakika
-                    2000,       // Playback start: 2 saniye
-                    5000        // Rebuffer: 5 saniye
+                    15000,      // Min buffer: 15 seconds
+                    50000,      // Max buffer: 50 seconds
+                    2500,       // Playback start: 2.5 seconds
+                    5000        // Rebuffer: 5 seconds
                 )
                 .setBackBuffer(10000, true)  // 10 sn geri buffer
                 .setTargetBufferBytes(C.LENGTH_UNSET)
@@ -166,41 +167,52 @@ public class PlayerActivity extends AppCompatActivity {
         if (player == null || streamUrl == null) return;
         
         try {
-            // HTTP data source with custom user agent and keep-alive
-            String finalUserAgent = userAgent != null && !userAgent.isEmpty() 
-                ? userAgent 
-                : "VLC/3.0.18 LibVLC/3.0.18"; // Default to VLC user agent for better compatibility
-
+            // Trim URL to avoid whitespace issues
+            streamUrl = streamUrl.trim();
+            
+            // Xtream Codes fix removed - keeping original URL
+            Uri uri = Uri.parse(streamUrl);
+            
+            // Generate default headers map
             java.util.Map<String, String> defaultHeaders = new java.util.HashMap<>();
             defaultHeaders.put("Connection", "keep-alive");
-            defaultHeaders.put("Accept", "*/*");
+            
+            // IMPORTANT: Inject cookies from WebView (Auth token usually lives here)
+            String cookies = android.webkit.CookieManager.getInstance().getCookie(streamUrl);
+            if (cookies != null && !cookies.isEmpty()) {
+                Log.d(TAG, "Injecting authentication cookies into player");
+                defaultHeaders.put("Cookie", cookies);
+            }
+
+            // Use the same User-Agent as the system WebView for consistency
+            String defaultUserAgent = Util.getUserAgent(this, "IPTVPlayer");
+            String finalUserAgent = userAgent != null && !userAgent.isEmpty() ? userAgent : defaultUserAgent;
 
             DefaultHttpDataSource.Factory httpFactory = new DefaultHttpDataSource.Factory()
                 .setUserAgent(finalUserAgent)
-                .setConnectTimeoutMs(15000)
-                .setReadTimeoutMs(15000)
+                .setConnectTimeoutMs(30000)
+                .setReadTimeoutMs(30000)
                 .setAllowCrossProtocolRedirects(true)
                 .setKeepPostFor302Redirects(true)
                 .setDefaultRequestProperties(defaultHeaders);
             
             DataSource.Factory dataSourceFactory = httpFactory;
             
-            MediaSource mediaSource;
-            Uri uri = Uri.parse(streamUrl);
-            
             // Treat as live stream - daha toleranslı
             MediaItem mediaItem = new MediaItem.Builder()
                 .setUri(uri)
                 .setLiveConfiguration(
                     new MediaItem.LiveConfiguration.Builder()
-                        .setMaxPlaybackSpeed(1.02f)  // Yavaş catch up
-                        .setMinPlaybackSpeed(0.98f)  // Yavaş slow down
-                        .setTargetOffsetMs(15000)    // 15 saniye live edge'den uzak
+                        .setMaxPlaybackSpeed(1.02f)
+                        .setMinPlaybackSpeed(0.98f)
+                        .setTargetOffsetMs(15000)
                         .setMinOffsetMs(10000)
                         .setMaxOffsetMs(60000)
                         .build()
                 )
                 .build();
+            
+            MediaSource mediaSource;
             
             // HLS veya Progressive source seç
             if (streamUrl.contains(".m3u8") || streamUrl.contains("m3u8")) {

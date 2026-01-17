@@ -14,6 +14,10 @@ export const getSupabaseClient = () => supabase;
  * Fetch channels using direct REST API
  */
 export const fetchChannelsFromSupabase = async (url, key) => {
+    if (!url || !key) {
+        console.error('Supabase Configuration Missing!', { url, key: key ? 'PRESENT' : 'MISSING' });
+        throw new Error('Supabase URL or Key is missing. Please check your .env file and rebuild the app.');
+    }
     try {
         console.log('Fetching from Supabase via REST API...');
         
