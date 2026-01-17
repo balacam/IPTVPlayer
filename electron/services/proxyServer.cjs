@@ -38,7 +38,27 @@ async function startProxyServer() {
         const client = targetUrl.startsWith('https:') ? https : http;
         
         // Parse target URL for request options
-        const targetParsed = new URL(targetUrl);
+        let targetParsed;
+        try {
+            targetParsed = new URL(targetUrl);
+        } catch (e) {
+            res.writeHead(400);
+            res.end('Invalid URL');
+            return;
+        }
+
+        // SSRF Protection: Block access to localhost/loopback
+        const hostname = targetParsed.hostname.toLowerCase();
+        if (hostname === 'localhost' || 
+            hostname === '127.0.0.1' || 
+            hostname === '::1' || 
+            hostname.startsWith('0.0.0.0')) {
+            
+            console.warn('Blocked SSRF attempt to localhost:', targetUrl);
+            res.writeHead(403);
+            res.end('Access to localhost is forbidden');
+            return;
+        }
         
         const options = {
             hostname: targetParsed.hostname,

@@ -22,8 +22,8 @@ function createWindow() {
             nodeIntegration: false,
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.cjs'),
-            webSecurity: false, // Disable web security for IPTV streams (handled by proxy)
-            allowRunningInsecureContent: true,
+            webSecurity: true, // Enable web security
+            allowRunningInsecureContent: false,
             experimentalFeatures: true
         }
     });
@@ -33,6 +33,19 @@ function createWindow() {
     
     // Setup IPC handlers
     setupIpcHandlers(mainWindow);
+
+    // Content Security Policy (CSP)
+    mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+        callback({
+            responseHeaders: {
+                ...details.responseHeaders,
+                'Content-Security-Policy': ["default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: http: https: ws: wss:; img-src 'self' data: http: https: blob:; media-src 'self' http: https: data: blob:"],
+                'Access-Control-Allow-Origin': ['*'],
+                'Access-Control-Allow-Methods': ['GET, POST, PUT, DELETE, OPTIONS'],
+                'Access-Control-Allow-Headers': ['*'],
+            }
+        });
+    });
 
     // Disable CORS completely (Extra safety, though proxy handles it too)
     mainWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {

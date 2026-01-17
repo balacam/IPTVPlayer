@@ -1,6 +1,6 @@
 {
     "name": "iptvplayer",
-    "version": "2.2.0",
+    "version": "2.5.3",
     "description": "Cross-platform IPTV Player app",
     "type": "module",
     "main": "electron/main.cjs",
@@ -40,6 +40,7 @@
         "build": "vite build",
         "build:tv": "vite build --mode tv",
         "preview": "vite preview",
+        "test": "vitest",
         "start": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .\"",
         "electron:start": "electron .",
         "electron:dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 npm run electron:start\"",
@@ -76,7 +77,6 @@
         "react-dom": "^18.2.0",
         "react-virtualized-auto-sizer": "^1.0.26",
         "react-window": "^1.8.10",
-        "tesseract.js": "^7.0.0",
         "video.js": "^8.23.4"
     },
     "devDependencies": {
@@ -92,6 +92,7 @@
         "postcss": "^8.5.6",
         "tailwindcss": "^4.1.18",
         "vite": "^5.0.0",
+        "vitest": "^4.0.17",
         "wait-on": "^7.2.0"
     }
 }

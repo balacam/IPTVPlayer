@@ -8,5 +8,10 @@ export default defineConfig({
     base: './', // Important for Electron to find assets
     server: {
         port: 5173,
+    },
+    build: {
+        commonjsOptions: {
+            transformMixedEsModules: true,
+        },
     }
 });

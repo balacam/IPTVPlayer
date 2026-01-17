@@ -167,12 +167,21 @@ public class PlayerActivity extends AppCompatActivity {
         
         try {
             // HTTP data source with custom user agent and keep-alive
+            String finalUserAgent = userAgent != null && !userAgent.isEmpty() 
+                ? userAgent 
+                : "VLC/3.0.18 LibVLC/3.0.18"; // Default to VLC user agent for better compatibility
+
+            java.util.Map<String, String> defaultHeaders = new java.util.HashMap<>();
+            defaultHeaders.put("Connection", "keep-alive");
+            defaultHeaders.put("Accept", "*/*");
+
             DefaultHttpDataSource.Factory httpFactory = new DefaultHttpDataSource.Factory()
-                .setUserAgent(userAgent != null ? userAgent : "ExoPlayer")
+                .setUserAgent(finalUserAgent)
                 .setConnectTimeoutMs(15000)
                 .setReadTimeoutMs(15000)
                 .setAllowCrossProtocolRedirects(true)
-                .setKeepPostFor302Redirects(true);
+                .setKeepPostFor302Redirects(true)
+                .setDefaultRequestProperties(defaultHeaders);
             
             DataSource.Factory dataSourceFactory = httpFactory;
             

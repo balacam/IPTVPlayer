@@ -7,6 +7,7 @@ import { useDebounce } from '../hooks/useDebounce';
 // Global logo cache
 const logoCache = new Map();
 
+// Optimized preload: limit concurrent requests
 const preloadLogo = (url) => {
     if (!url || logoCache.has(url)) return;
     const img = new Image();
@@ -70,40 +71,40 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
         );
     }, [channels, debouncedSearchTerm]);
 
-    // Arama yapılınca tüm grupları aç
-    useEffect(() => {
-        if (debouncedSearchTerm.trim()) {
-            const allGroups = {};
-            Object.keys(groupedChannels).forEach(g => allGroups[g] = true);
-            setExpandedGroups(allGroups);
-        }
-    }, [debouncedSearchTerm, groupedChannels]);
-
-    // Group channels
-    const groupedChannels = useMemo(() => {
-        return filteredChannels.reduce((acc, channel) => {
-            const groupName = isPlaylistView ? 'All' : (channel.group || 'Other');
-            if (!acc[groupName]) acc[groupName] = [];
-            acc[groupName].push(channel);
-            return acc;
-        }, {});
-    }, [filteredChannels, isPlaylistView]);
-
     // Build flat list with group headers
+    // Optimization: Avoid grouping if not needed (playlist view)
     const flatList = useMemo(() => {
+        // If playlist view (show all), just map channels directly
+        if (isPlaylistView) {
+            return filteredChannels.map(channel => ({ type: 'channel', channel }));
+        }
+
+        // Group channels
+        const groups = {};
+        for (const channel of filteredChannels) {
+            const groupName = channel.group || 'Other';
+            if (!groups[groupName]) groups[groupName] = [];
+            groups[groupName].push(channel);
+        }
+
         const items = [];
-        Object.entries(groupedChannels).forEach(([groupName, groupChannels]) => {
-            if (!isPlaylistView) {
-                items.push({ type: 'header', groupName, count: groupChannels.length });
-            }
-            if (isPlaylistView || expandedGroups[groupName]) {
-                groupChannels.forEach(channel => {
+        // Sort groups alphabetically or keep original order? Original implementation didn't sort explicitly but iteration order is insertion order usually.
+        // Let's use Object.entries
+        for (const [groupName, groupChannels] of Object.entries(groups)) {
+            items.push({ type: 'header', groupName, count: groupChannels.length });
+            
+            // If expanded or searching (search expands all usually)
+            if (expandedGroups[groupName] || debouncedSearchTerm.trim()) {
+                for (const channel of groupChannels) {
                     items.push({ type: 'channel', channel });
-                });
+                }
             }
-        });
+        }
         return items;
-    }, [groupedChannels, expandedGroups, isPlaylistView]);
+    }, [filteredChannels, isPlaylistView, expandedGroups, debouncedSearchTerm]);
+
+    // Arama yapılınca tüm grupları aç logic removed from useEffect to reduce re-renders. 
+    // Handled in flatList generation directly: if debouncedSearchTerm is present, show all channels.
 
     const toggleGroup = useCallback((groupName) => {
         setExpandedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }));
@@ -123,6 +124,10 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
         const groupName = findCurrentGroupName();
         if (!groupName || isPlaylistView) return;
 
+        // If we are searching, collapsing might not make sense or should clear search?
+        // Let's keep original behavior but respect search
+        if (debouncedSearchTerm.trim()) return;
+
         if (expandedGroups[groupName]) {
             setExpandedGroups(prev => ({ ...prev, [groupName]: false }));
             const headerIndex = flatList.findIndex(
@@ -132,7 +137,7 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
                 setFocusedIndex(headerIndex);
             }
         }
-    }, [findCurrentGroupName, expandedGroups, flatList, isPlaylistView]);
+    }, [findCurrentGroupName, expandedGroups, flatList, isPlaylistView, debouncedSearchTerm]);
 
     const searchInputRef = useRef(null);
 
@@ -191,24 +196,34 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
     // Scroll to focused item
     useEffect(() => {
         if (listRef.current) {
-            listRef.current.scrollToItem(focusedIndex, 'smart');
+            // Check bounds
+            if (focusedIndex >= 0 && focusedIndex < flatList.length) {
+                listRef.current.scrollToItem(focusedIndex, 'smart');
+            }
         }
-    }, [focusedIndex]);
+    }, [focusedIndex, flatList.length]);
 
-    // Preload logos
+    // Preload logos - Optimized to load fewer at once
     useEffect(() => {
         if (channels?.length > 0) {
-            channels.slice(0, 100).forEach(ch => ch.logo && preloadLogo(ch.logo));
+            // Reduced from 100 to 20 for better performance
+            channels.slice(0, 20).forEach(ch => ch.logo && preloadLogo(ch.logo));
         }
     }, [channels]);
 
     // Row renderer
     const Row = useCallback(({ index, style }) => {
         const item = flatList[index];
+        // Safe check
+        if (!item) return null;
+
         const isFocused = focusedIndex === index;
 
         if (item.type === 'header') {
-            const isExpanded = expandedGroups[item.groupName];
+            // If searching, always expanded visually (logic handled in flatList)
+            // But we need to show the icon state correctly
+            const isExpanded = expandedGroups[item.groupName] || debouncedSearchTerm.trim();
+            
             return (
                 <div style={style}
                     className={`bg-[#1e293b] border-b border-gray-700/50 px-4 flex items-center cursor-pointer hover:bg-[#253248] transition-colors ${
@@ -247,7 +262,7 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
                 </div>
             </div>
         );
-    }, [flatList, expandedGroups, selectedChannel, onSelectChannel, toggleGroup, focusedIndex]);
+    }, [flatList, expandedGroups, selectedChannel, onSelectChannel, toggleGroup, focusedIndex, debouncedSearchTerm]);
 
     return (
         <div className="w-[450px] bg-[#0f172a] border-r border-gray-800 h-full flex flex-col">
@@ -285,7 +300,7 @@ const ChannelList = ({ channels, selectedChannel, onSelectChannel, isPlaylistVie
                                 width={width}
                                 itemCount={flatList.length}
                                 itemSize={56}
-                                overscanCount={10}
+                                overscanCount={5} // Reduced overscan for performance
                             >
                                 {Row}
                             </List>
